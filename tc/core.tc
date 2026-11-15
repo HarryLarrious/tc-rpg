@@ -3,6 +3,8 @@
 
 /** Per player UUID: 1 while the player is in the world (embodied). */
 declare global pIn: dict[num];
+/** Per player UUID: their name (kept current on join). */
+declare saved playerNames: dict[str];
 /** Plot spawn point for new characters (set by the world generator). */
 declare saved spawnPoint: vec;
 /** 1: print debug values every second. */
@@ -13,6 +15,7 @@ declare global loopSeq: num;
 playerevent join {
     line uuid = default.uuid;
         default.setToAdventureMode();
+    saved playerNames[line uuid] = "%default";
     default.clearInventory();
     packSend();
     ensureGameLoop();

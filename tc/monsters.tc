@@ -268,17 +268,23 @@ function enemyDie(id: str, by: str) {
         selected.sendMessage(s"<gray>%var(mname) defeated: <#9BE27A>+%var(xp) XP <gold>+%var(gold) gold");
         select reset;
     }
-    // Loot: monsters sometimes drop gear; bosses always drop something good.
+    // Loot goes straight into the killer's bag (their camera is away
+    // from their body, so they could not pick drops up).
     line boss = (line d[10] as num) >= 200;
-    if (num.randomd(0, 1) < 0.18 || line boss) {
-        line it = rollLoot(lvl, game.ticksSinceStartup + num.randomd(0, 99999));
-        if (line boss) {
-            line it = makeWeapon(weaponTypes()[1 + num.floor(num.randomd(0, 17))] as str, num.clamp(num.floor(lvl / 4) + 2, 1, 9), num.round(num.randomd(4, 6)), game.ticksSinceStartup);
+    if (global pBody.hasKeys(by)) {
+        if (num.randomd(0, 1) < 0.18 || line boss) {
+            line it = rollLoot(lvl, game.ticksSinceStartup + num.randomd(0, 99999));
+            if (line boss) {
+                line it = makeWeapon(weaponTypes()[1 + num.floor(num.randomd(0, 17))] as str, num.clamp(num.floor(lvl / 4) + 2, 1, 9), num.round(num.randomd(4, 6)), game.ticksSinceStartup);
+            }
+            giveLoot(by, line it);
         }
-        game.spawnItem(line it, loc(line c.x, line c.y, line c.z));
-    }
-    if (num.randomd(0, 1) < 0.08) {
-        game.spawnItem(makeScroll(randomWord(lvl)), loc(line c.x, line c.y, line c.z));
+        if (num.randomd(0, 1) < 0.08) {
+            giveLoot(by, makeScroll(randomWord(lvl)));
+        }
+        if (num.randomd(0, 1) < 0.12) {
+            giveLoot(by, makePotion(["hp", "mana", "sta"][1 + num.floor(num.randomd(0, 2.99))] as str, 1));
+        }
     }
     if (line boss) {
         saved bossRespawn[line t] = now() + 6000;
@@ -286,6 +292,16 @@ function enemyDie(id: str, by: str) {
         allPlayers.sendTitle(s"<gold><b>%var(bname)</b>", s"<yellow>has been defeated!", 10, 60, 20);
     }
     enemyRemove(id);
+}
+
+/** Puts item it in player uuid's bag with a notice. */
+function giveLoot(uuid: str, it: item) {
+    select playersByName(uuid);
+    selected.giveItems(it);
+    line n = it.getName();
+    selected.sendMessage(s"<gold>Loot: </gold>%var(n)");
+    selected.playSound(snd("Experience Orb Pickup", 0.8, 0.8));
+    select reset;
 }
 
 /** Status effects on enemy id: burn, chill, poison, stun, root. */
@@ -443,6 +459,24 @@ function enemyTick(id: str) {
 function enemyWindup(id: str, d: list) {
     global eState[id] = "wind";
     global eT[id] = d[12] as num;
+    if ((d[10] as num) >= 200) {
+        line n = 1;
+        if (global eHits.hasKeys(id)) {
+            line n = global eHits[id] + 1;
+        }
+        global eHits[id] = line n;
+        if (line n % 3 == 0) {
+            // Warn of the slam: a red ring on the ground and a longer windup.
+            global eSlam[id] = 1;
+            global eT[id] = 26;
+            line c0 = global ePos[id];
+            repeat (line i to 24) {
+                line a = line i * 15;
+                allPlayers.displayParticleEffect(par("Dust", amount=2, spreadHoriz=0.1, spreadVert=0, color="#FF2020", size=2), loc(line c0.x + num.cos(line a) * 5.5, line c0.y + 0.2, line c0.z + num.sin(line a) * 5.5));
+            }
+            allPlayers.playSound(snd("Ravager Roar", 1, 0.7), loc(line c0.x, line c0.y, line c0.z));
+        }
+    }
     line c = enemyCenter(id);
     allPlayers.displayParticleEffect(par("Dust", amount=10, spreadHoriz=0.5, spreadVert=0.6, color="#FF2020", size=1.4), loc(c.x, c.y, c.z));
     allPlayers.playSound(snd("Evoker Prepare Attack", 0.4, 1.6), loc(c.x, c.y, c.z));
@@ -461,6 +495,24 @@ function enemyStrike(id: str, tgt: str, pos: vec, tp: vec) {
     select reset;
     line kind = d[7] as str;
     line c = enemyCenter(id);
+    if (global eSlam[id] == 1) {
+        // The boss's ground slam: everyone close takes a heavy blow unless
+        // they rolled out of it.
+        global eSlam[id] = 0;
+        line c0 = global ePos[id];
+        for (line uuid, line b of global pBody) {
+            if ((bodyFeet(uuid) - line c0).len() < 5.5) {
+                playerHurt(uuid, (d[4] as num) * (1 + (global eLvl[id] - 1) * 0.22) * 1.6, line c0, d[14] as str);
+            }
+        }
+        fxBurst(line c0 + vec(0, 0.3, 0), "earth", 2.5);
+        fxExpandRing(line c0 + vec(0, 0.2, 0), 5.5, 0xFF3020);
+        allPlayers.playSound(snd("Explode", 0.8, 0.6), loc(line c0.x, line c0.y, line c0.z));
+        select entitiesByName(id);
+        selectedEntity.setArmsRaised(armsRaised="Disable");
+        select reset;
+        return;
+    }
     if (kind == "melee") {
         line toV = vec(tp.x - pos.x, 0, tp.z - pos.z);
         // Lunge a little, then hit if the target is still in reach.
@@ -485,6 +537,10 @@ function enemyStrike(id: str, tgt: str, pos: vec, tp: vec) {
         allPlayers.playSound(snd("Arrow Shoot", 0.6, 0.9), loc(c.x, c.y, c.z));
     }
 }
+
+/** Per boss: attacks so far, and 1 while a slam is coming. */
+declare global eHits: dict[num];
+declare global eSlam: dict[num];
 
 /** Per player: poisoned until tick. */
 declare global pPoison: dict[num];

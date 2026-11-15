@@ -45,6 +45,7 @@ T = {}
 def textures():
     for kind in ("skin", "cloth", "leather", "metal", "chain", "hair", "fur", "dark", "white", "bone"):
         T[kind] = make_texture(f"body_{kind}", kind)
+    T["lips"] = make_texture("body_lips", "skin", rgb=(190, 96, 96))
     T["boot"] = make_texture("body_boot", "leather", rgb=(110, 74, 46))
     T["belt"] = make_texture("body_belt", "leather", rgb=(70, 48, 30))
     T["buckle"] = make_texture("body_buckle", "metal", rgb=(230, 190, 90))
@@ -53,7 +54,7 @@ def textures():
 # ---------------------------------------------------------------- head
 
 
-def head_base() -> Model:
+def head_base(female: bool = False) -> Model:
     m = Model()
     s = T["skin"]
     m.box((-4, 0, -4), (4, 8, 4), s, SKIN)
@@ -66,7 +67,16 @@ def head_base() -> Model:
         m.box((ix0, 3, 4.02), (ix1, 4.5, 4.12), T["white"], EYE)
         m.box((x0, 5.0, 4), (x1, 5.6, 4.15), T["hair"], HAIR)
     m.box((-0.5, 2.25, 4), (0.5, 3.75, 4.8), s, SKIN)
-    m.box((-1.5, 1.25, 4), (1.5, 1.75, 4.08), T["dark"])
+    if female:
+        # Lashes, softer brows and colored lips.
+        for side in (1, -1):
+            x0, x1 = sorted((side * 0.6, side * 3.2))
+            m.box((x0, 4.4, 4.02), (x1, 4.75, 4.14), T["dark"])
+        m.box((-1.2, 1.2, 4), (1.2, 1.8, 4.1), T["lips"])
+    else:
+        m.box((-1.5, 1.25, 4), (1.5, 1.75, 4.08), T["dark"])
+        # Jaw line.
+        m.box((-4.05, 0, -2), (4.05, 0.6, 4.05), s, SKIN)
     return m
 
 
@@ -451,7 +461,8 @@ def main() -> None:
     textures()
     n = lambda m, rel: model_node(m.save(rel))
 
-    head_layers = [n(head_base(), "body/head")]
+    head_layers = [select_node(0, {"f": n(head_base(True), "body/head_f"), "df": n(head_base(True), "body/head_f")},
+                               n(head_base(), "body/head"))]
     head_layers.append(select_node(1, {k: n(helmet(k), f"body/helmet_{k}") for k in ARMORS}))
     head_layers.append(select_node(2, {k: n(hair(k), f"body/hair_{k}") for k in HAIRS}))
     head_layers.append(select_node(3, {k: n(ears(k), f"body/ears_{k}") for k in EARS}))

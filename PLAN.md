@@ -166,8 +166,11 @@ works a little each tick and slows down when the plot CPU is high.
 
 - Terrain: value-noise height lattice, rivers, a lake, forests, hills,
   rocky highlands at the edges.
-- Settlements: the seed always places the city of **Valenmoor** near the
-  middle; larger plots add villages.
+- Settlements: the seed always places the walled city of **Valenmoor**
+  near the middle, and (on plots of 601+ blocks) a village at the end of
+  the country road that points away from the points of interest. The
+  village has its own armory, library, blacksmith, guild hall, inn and
+  reeve's manor.
 - Town layout (after the "medieval fantasy city" generators): a market
   square, main streets from the square to the gates with gentle curves,
   side streets, lots cut along the streets, a wall with gates and towers,
@@ -205,3 +208,39 @@ harder contracts and better rewards.
   of a player.
 - World generation and other bulk work back off when `game.cpuUsage` is
   high.
+
+## Status (built and tested on the plot)
+
+- Camera boom, body, rig, races, appearance, gear on the model: working.
+- World generation from the seed: terrain, river, lake, city (about 170
+  buildings), village, farms, roads, bridges, lamps, forests, points of
+  interest. About 20 minutes on a Mega plot; resumes after restarts.
+- Combat: combos, heavy attacks, dodge, lock-on, slash trails, damage
+  numbers, monsters with telegraphed attacks, ranged and caster enemies,
+  bosses with a ground slam every third attack.
+- Magic: phrase compiler, all forms and verbs, zones, wards, familiars,
+  chat incantations, Spell Loom.
+- Town: NPC needs and utility decisions, street-graph walking, chatter,
+  dialogue, shops, library, smith repair and upgrades, inn, chapel, guild
+  contracts and ranks, arts trainer, the lord's story.
+
+## Lessons from the plot
+
+- Spawning into an unloaded chunk silently fails (no UUID). Wait for the
+  chunk (teleport the player first) and validate UUIDs before using them.
+- A ridden entity does not teleport reliably across chunks: rebuild the
+  body at the destination instead.
+- The dismount event fires for code-driven dismounts too; allow it while
+  the game moves the player.
+- Styled text `%var()` inserts plain text: keep MiniMessage tags in the
+  literal and pass `txt` values around for colored messages.
+- Dialogs of type "Multi Action with Exit Button" turn the first button
+  into the exit button; use "Multi Action".
+- Startup cleanup (removing stale entities) must run once, synchronously,
+  before anything spawns.
+
+## Ideas for later
+
+- Mounts (the stables), fishing at the lake dock, housing.
+- More monster types with custom models (the rig can draw monsters too).
+- Party play and shared contracts.

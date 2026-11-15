@@ -683,6 +683,20 @@ function npcStep(id: str) {
             global nStuck[id] = 0;
         }
     }
+    // Chatter: socialising folk say something now and then.
+    if (line path.len() == 0 && line near < 24 && (global tick + num.parse(id.replace("n", "")) * 37) % 240 < 4) {
+        if (global nAct[id] == "social" || global nAct[id] == "eat" || num.randomd(0, 1) < 0.25) {
+            npcSay(id, chatterLine(id, line nearP));
+        }
+    }
+    // Guards strike monsters in reach.
+    if (global nAct[id] == "defend" && now() % 20 < 4) {
+        for (line eid of enemiesNear(line p + vec(0, 1, 0), 3.2)) {
+            hitEnemy(line eid, 14, 0, line p, 0.5, "", "phys");
+            global nYaw[id] = yawOf(global ePos[line eid] - line p);
+            fxSlash(line p + vec(0, 1.1, 0), global nYaw[id], 0, 1, 0xFFFFFF, 3);
+        }
+    }
     // Face a player who comes close.
     line greet = 0;
     if (line near < 4 && line path.len() == 0 && line nearP != "") {
@@ -730,4 +744,54 @@ function interact {
         return;
     }
     talkTo(line best);
+}
+
+/** A speech bubble over NPC id for three seconds. */
+function npcSay(id: str, text: str) {
+    line p = global nPos[id];
+    line s = (global nApp[id]["scale"] as num);
+    game.spawnTextDisplay(loc(p.x, p.y + 2.5 * line s + 0.3, p.z), s"<white>%var(text)");
+    lastEntity.setDisplayBillboard(type="Center");
+    lastEntity.setTextDisplayBackground("#202020", 70);
+    lastEntity.setDisplayScale(0.6, 0.6, 0.6);
+    lastEntity.setTextDisplayLineWidth(160);
+    fxKeep(lastEntity.uuid, 60);
+}
+
+/** Something NPC id might say, given the time, its needs and the deeds of
+ * the nearest player. */
+function chatterLine(id: str, who: str): str {
+    line h = hourNow();
+    line needs = global nNeeds[id];
+    line role = global nRole[id];
+    line pick = wHash(now(), num.parse(id.replace("n", "")), 11);
+    if (who != "" && global pBody.hasKeys(who)) {
+        line st = lordStage(who);
+        line name = "the stranger";
+        if (saved playerNames.hasKeys(who)) {
+            line name = saved playerNames[who];
+        }
+        if (st >= 2 && line pick % 4 == 0) {
+            return ["They say %var(name) killed Varro the bandit chief!", "The roads are safer since %var(name) came to town.", "%var(name)! The hero! Can I shake your hand?"][1 + line pick % 3] as str;
+        }
+        if ((pdGet(who, "lvl") as num) >= 10 && line pick % 5 == 0) {
+            return "That one's no ordinary traveller. Look at that gear.";
+        }
+    }
+    if ((line needs[2] as num) > 0.7) {
+        return ["I'm starving. Is the inn open?", "Smells like the bakery's got fresh bread.", "My stomach's growling louder than a wolf."][1 + line pick % 3] as str;
+    }
+    if ((line needs[1] as num) < 0.25) {
+        return ["*yawn* Long day.", "I could sleep for a week.", "Bed. Soon."][1 + line pick % 3] as str;
+    }
+    if (role == "guard") {
+        return ["Quiet watch today.", "Keep your eyes on the treeline.", "Wolves were howling last night."][1 + line pick % 3] as str;
+    }
+    if (role == "child") {
+        return ["Tag! You're it!", "I'm gonna be an adventurer!", "Mum! Look at the knight!"][1 + line pick % 3] as str;
+    }
+    if (h >= 18) {
+        return ["Fine evening for an ale.", "The tavern's lively tonight.", "Lantern oil's gone up again."][1 + line pick % 3] as str;
+    }
+    return ["Did you hear about the bandits?", "Prices at the market are criminal.", "The library got new books, they say.", "Lovely weather.", "My cousin saw a spider the size of a cart!", "The old ruins give me the shivers."][1 + line pick % 6] as str;
 }

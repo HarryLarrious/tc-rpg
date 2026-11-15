@@ -791,7 +791,11 @@ function hudExtra(uuid: str): txt {
     if (line tgt != "") {
         return enemyHudLine(line tgt);
     }
-    return s"";
+    line r = pdOf(uuid);
+    line lvl = line r["lvl"];
+    line pct = num.floor((line r["xp"] as num) / xpNeed(line r["lvl"] as num) * 100);
+    line gold = line r["gold"];
+    return s"<gray>Lv <white>%var(lvl)</white> (%var(pct)%) <gold>%var(gold)g";
 }
 
 // ---------------------------------------------------------------- lock-on
