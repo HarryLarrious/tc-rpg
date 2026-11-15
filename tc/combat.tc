@@ -317,7 +317,7 @@ function combatTick(uuid: str) {
     line len = global pActLen[uuid];
     line f = line t / line len;
     if (line a == "atk" || line a == "heavy") {
-        if (global pStruck[uuid] == 0 && line f >= 0.45) {
+        if (global pStruck[uuid] == 0 && line f >= strikeTime(uuid)) {
             global pStruck[uuid] = 1;
             meleeStrike(uuid);
         }
@@ -397,120 +397,55 @@ function actionMove(uuid: str, v: vec, fwd: vec): vec {
     return v * 0.6;
 }
 
-/** The pose of player uuid's current action over the locomotion pose p. */
+/** Clip of player uuid's current action a (weapon animation class cls). */
+function actClip(uuid: str, a: str, cls: str): str {
+    if (a == "atk") {
+        return attackClip(cls, global pCombo[uuid]);
+    }
+    if (a == "heavy") {
+        return attackClip(cls, 4);
+    }
+    if (a == "dodge") {
+        return "roll";
+    }
+    if (a == "dead") {
+        return "death";
+    }
+    if (a == "ability") {
+        return artClip(global pArt[uuid]);
+    }
+    // hurt, draw, shoot, cast share their clip's name.
+    return a;
+}
+
+/** Normalized time of the strike of player uuid's current attack. */
+function strikeTime(uuid: str): num {
+    line name = actClip(uuid, global pAct[uuid], animClass(mainType(uuid)));
+    line h = (global animMeta[line name] as list[num])[3];
+    if (line h < 0) {
+        return 0.45;
+    }
+    return line h;
+}
+
+/** Player uuid's pose: the weapon stance and the current action over the
+ * locomotion pose p. */
 function actionPose(uuid: str, p: list[num]): list[num] {
     line a = global pAct[uuid];
-    line out = p;
-    if (line a == "") {
-        // Weapon at rest: held low and forward; two-handers across.
-        line cls = animClass(mainType(uuid));
-        if (line cls == "bow") {
-            line out[9] = (line out[9] as num) + 10;
-            line out[17] = -40;
-        } else if (line cls == "staff") {
-            line out[6] = 15;
-            line out[17] = -75;
-        } else {
-            line out[6] = (line out[6] as num) + 12;
-            line out[17] = -30;
-        }
-        if (global pAim[uuid] > 0) {
-            line out[6] = 80;
-        }
-        return line out;
-    }
-    line t = global pActT[uuid];
-    line f = t / global pActLen[uuid];
-    if (line a == "dodge") {
-        line out[23] = line f * 360;
-        line out[16] = num.sin(line f * 180) * 6;
-        line out[12] = 70;
-        line out[14] = 60;
-        line out[6] = 60;
-        line out[9] = 60;
-        return line out;
-    }
-    if (line a == "dead") {
-        line out[23] = 0 - num.min(1, line f * 4) * 85;
-        line out[16] = num.min(1, line f * 4) * -9;
-        line out[6] = 150;
-        line out[9] = 150;
-        return line out;
-    }
-    if (line a == "hurt") {
-        line k = num.sin(line f * 180);
-        line out[1] = (line out[1] as num) - 18 * line k;
-        line out[4] = (line out[4] as num) + 15 * line k;
-        line out[6] = (line out[6] as num) - 20 * line k;
-        line out[9] = (line out[9] as num) - 20 * line k;
-        return line out;
-    }
-    if (line a == "draw" || line a == "shoot") {
-        // Bow: left arm out holding the bow, right arm drawing.
-        line k = num.min(1, line f * 2.5);
-        if (line a == "shoot") {
-            line k = 1 - line f;
-        }
-        line out[9] = 90;
-        line out[10] = -15;
-        line out[6] = 90;
-        line out[7] = 40 * line k;
-        line out[8] = 20 * line k;
-        line out[2] = 0 - 25 * line k;
-        line out[20] = -90;
-        line out[17] = -60;
-        return line out;
-    }
-    if (line a == "cast" || line a == "ability") {
-        line k = num.sin(num.min(1, line f * 1.6) * 180);
-        line out[6] = 40 + 90 * num.min(1, line f * 2);
-        line out[9] = 40 + 70 * num.min(1, line f * 2);
-        line out[11] = 20;
-        line out[8] = 15;
-        line out[17] = -80;
-        line out[1] = (line out[1] as num) - 6 * line k;
-        return line out;
-    }
-    // Attacks: windup to the start pose, strike to the end pose, recover.
     line cls = animClass(mainType(uuid));
-    line step = global pCombo[uuid];
-    if (line a == "heavy") {
-        line step = 4;
+    line out = addStance(p, stanceOf(line cls));
+    if (line a == "") {
+        if (global pAim[uuid] > 0) {
+            line out = blendAction(line out, "draw", 1, 1);
+        }
+        return line out;
     }
-    line md = moveData(line cls, line step);
-    line w = 0;
-    line s = 0;
-    if (line f < 0.35) {
-        line w = ease(line f / 0.35);
-    } else if (line f < 0.55) {
-        line w = 1;
-        line s = ease((line f - 0.35) / 0.2);
-    } else {
-        line w = 1 - ease((line f - 0.55) / 0.45);
-        line s = 1;
+    line f = global pActT[uuid] / global pActLen[uuid];
+    line hold = 0;
+    if (line a == "dead") {
+        line hold = 1;
     }
-    line arP = md[2] + (md[6] - md[2]) * line s;
-    line arO = md[3] + (md[7] - md[3]) * line s;
-    line wP = md[4] + (md[8] - md[4]) * line s;
-    line tY = md[5] + (md[9] - md[5]) * line s;
-    line out[6] = (p[6] as num) * (1 - line w) + line arP * line w;
-    line out[8] = (p[8] as num) * (1 - line w) + line arO * line w;
-    line out[17] = -30 * (1 - line w) + line wP * line w;
-    line out[2] = (p[2] as num) * (1 - line w) + line tY * line w;
-    line out[1] = (p[1] as num) + md[10] * line s * line w;
-    if (md[14] == 1 || line cls == "staff") {
-        // Two-handed: the left hand follows to the grip.
-        line out[9] = line arP * line w + (p[9] as num) * (1 - line w);
-        line out[11] = (0 - line arO - 25) * line w + (p[11] as num) * (1 - line w);
-    } else if (line cls == "fist" && line step == 2) {
-        line out[9] = line out[6];
-        line out[6] = p[6];
-    }
-    if (line a == "heavy" && (line cls == "heavy" || line cls == "blade")) {
-        // Spinning heavy blow: the whole body turns with the cut.
-        line out[2] = (line out[2] as num) + 360 * line s * (1 - line s) * 0;
-    }
-    return line out;
+    return blendAction(line out, actClip(uuid, line a, line cls), line f, actionWeight(line f, line hold));
 }
 
 // ---------------------------------------------------------------- hits

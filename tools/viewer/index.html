@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RPG Model Viewer</title>
+<style>
+  :root { --bg: #16181d; --panel: #20232a; --line: #343842; --text: #e4e6eb; --dim: #9aa0aa; --acc: #e0b04a; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 13px/1.4 system-ui, sans-serif; display: flex; height: 100vh; overflow: hidden; }
+  #side { width: 290px; flex: none; overflow-y: auto; background: var(--panel); border-right: 1px solid var(--line); padding: 10px 12px 40px; }
+  #view { flex: 1; position: relative; min-width: 0; }
+  canvas { display: block; }
+  h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--acc); margin: 14px 0 6px; }
+  label { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 3px 0; color: var(--dim); }
+  select, input[type=text] { width: 150px; background: #2a2e37; color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 2px 4px; }
+  input[type=color] { width: 44px; height: 20px; border: none; background: none; padding: 0; }
+  input[type=range] { width: 150px; }
+  button { background: #2f3440; color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 3px 8px; cursor: pointer; }
+  button:hover { border-color: var(--acc); }
+  .row { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0; }
+  #hud { position: absolute; left: 10px; bottom: 8px; color: var(--dim); font: 12px ui-monospace, monospace; white-space: pre; pointer-events: none; }
+  #err { position: absolute; top: 8px; left: 10px; color: #ff8080; font: 12px ui-monospace, monospace; white-space: pre; }
+  #chans { font: 11px ui-monospace, monospace; color: var(--dim); white-space: pre; column-count: 2; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="side">
+  <div class="row"><button id="reload" title="Re-read the pack and clip data (after running the generators)">Reload data</button><button id="shot">Front</button><button id="side3">Side</button><button id="top3">3/4</button></div>
+
+  <h2>Animation</h2>
+  <label>Mode <select id="mode">
+    <option value="clip">Clip</option>
+    <option value="loco">Locomotion mix</option>
+    <option value="rest">Rest pose</option>
+  </select></label>
+  <label>Clip <select id="clip"></select></label>
+  <label>Stance <select id="stance"><option value="">none</option></select></label>
+  <label>Speed (b/t) <input type="range" id="speed" min="0" max="0.35" step="0.005" value="0.1"></label>
+  <label>Playback <input type="range" id="rate" min="0.05" max="2" step="0.05" value="1"></label>
+  <label>Time <input type="range" id="time" min="0" max="1" step="0.001" value="0"></label>
+  <label>Clip ticks <input type="text" id="ticks" value="14"></label>
+  <div class="row"><button id="play">Pause</button><button id="step">Step 1 tick</button><label style="margin:0"><input type="checkbox" id="ghost"> Arc</label><label style="margin:0"><input type="checkbox" id="strip"> Strip</label><label style="margin:0"><input type="checkbox" id="joints"> Joints</label></div>
+
+  <h2>Character</h2>
+  <label>Build <select id="build"></select></label>
+  <label>Hair <select id="hairStyle"></select></label>
+  <label>Ears <select id="ears"></select></label>
+  <label>Beard <select id="beard"></select></label>
+  <label>Tail <select id="tail"></select></label>
+  <label>Scale <input type="range" id="scale" min="0.7" max="1.2" step="0.01" value="1"></label>
+  <label>Skin <input type="color" id="skin" value="#e0ac85"></label>
+  <label>Hair color <input type="color" id="hair" value="#5a3a22"></label>
+  <label>Eyes <input type="color" id="eye" value="#3c6e9e"></label>
+  <label>Clothes <input type="color" id="cloth" value="#8a6a45"></label>
+  <label>Trousers <input type="color" id="pants" value="#4e4234"></label>
+  <label>Horns <input type="color" id="horn" value="#2b2420"></label>
+
+  <h2>Armor</h2>
+  <label>Head <select id="a_head"></select></label>
+  <label>Torso <select id="a_torso"></select></label>
+  <label>Arms <select id="a_arm"></select></label>
+  <label>Legs <select id="a_leg"></select></label>
+  <label>Main color <input type="color" id="am" value="#9aa0a8"></label>
+  <label>Trim color <input type="color" id="at" value="#c8a050"></label>
+
+  <h2>Held</h2>
+  <label>Main hand <select id="main"></select></label>
+  <label>Off hand <select id="off"></select></label>
+  <label>Variant <select id="variant"><option>1</option><option>2</option><option>3</option></select></label>
+
+  <h2>Single model</h2>
+  <label>Model id <input type="text" id="single" placeholder="rpg:body/hair_curly"></label>
+
+  <h2>Pose channels</h2>
+  <div id="chans"></div>
+</div>
+<div id="view"><div id="err"></div><div id="hud"></div></div>
+<script type="module" src="viewer.js"></script>
+</body>
+</html>

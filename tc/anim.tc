@@ -1,49 +1,215 @@
-// Locomotion poses: idle breathing, walk and run cycles, jumping and
-// falling, and the head following the camera. Actions (attacks, casts,
-// dodges) overlay these in combat.tc.
+// Animation mixing: poses come from the keyframed clips of
+// pack/src/anim_clips.py (sampled into tc/anim_data.tc). Locomotion blends
+// idle, walk and run by speed; a stance adds the way a weapon is held; an
+// action clip (attack, roll, cast...) blends over the top.
+// tools/viewer/rig.js mirrors these rules: keep the two in step.
+
+/** Per stance clip: its offsets from the rest pose (built on first use). */
+declare global stanceDelta: dict[list];
 
 /** Linear blend of a and b by k. */
 function mix(a: num, b: num, k: num): num {
     return a + (b - a) * k;
 }
 
-/** Locomotion pose of a character. speed in blocks per tick, grounded
- * 0/1, phase the walk phase (degrees), t a tick counter, lookYaw/lookPitch
- * the head's turn relative to the body (degrees). */
-function locoPose(speed: num, grounded: num, phase: num, t: num, lookYaw: num, lookPitch: num): list[num] {
-    line p = poseZero();
-    line run = num.clamp((speed - 0.12) / 0.16, 0, 1);
-    line amp = num.clamp(speed / 0.2, 0, 1) * mix(38, 62, line run);
-    line sn = num.sin(phase);
-    line cs = num.cos(phase);
-    if (grounded == 1) {
-        // Legs swing opposite, arms opposite the legs.
-        line p[12] = line sn * line amp;
-        line p[14] = 0 - line sn * line amp;
-        line p[6] = 0 - line sn * line amp * 0.75;
-        line p[9] = line sn * line amp * 0.75;
-        line p[1] = mix(2, 12, line run) * num.clamp(speed / 0.2, 0, 1);
-        line p[16] = num.abs(line cs) * line amp * 0.018 - line amp * 0.008;
-        line p[2] = line sn * line amp * 0.12;
-        // Idle breathing.
-        line breath = num.sin(t * 4.5);
-        line p[8] = 3 + line breath * 1.5;
-        line p[11] = 3 + line breath * 1.5;
-        line p[16] = line p[16] + line breath * 0.15;
-        if (line run > 0.3) {
-            line p[6] = line p[6] - 20 * line run;
-            line p[9] = line p[9] - 20 * line run;
+/** The samples of clip `name` as numbers (parsed from animStr once). */
+function animSamples(name: str): list[num] {
+    if (!global animData.hasKeys(name)) {
+        line out: list[num] = [];
+        for (line v of (global animStr[name] as str).split(",")) {
+            line out.append(num.parse(line v as str));
+        }
+        global animData[name] = line out;
+    }
+    return global animData[name] as list[num];
+}
+
+/** Pose of clip `name` at normalized time t (0..1, looping clips wrap):
+ * the two nearest samples lerped. */
+function clipPose(name: str, t: num): list[num] {
+    line meta = global animMeta[name] as list[num];
+    line n = line meta[1];
+    line x = 0;
+    if (line meta[2] == 1) {
+        line x = (t - num.floor(t)) * line n;
+    } else {
+        line x = num.clamp(t, 0, 1) * (line n - 1);
+    }
+    line i = num.floor(line x);
+    line f = line x - line i;
+    line j = line i + 1;
+    if (line meta[2] == 1) {
+        line j = line j % line n;
+    } else {
+        line j = num.min(line j, line n - 1);
+    }
+    line d = animSamples(name);
+    line a = line i * 29;
+    line b = line j * 29;
+    line out: list[num] = [];
+    repeat (line c to 29) {
+        line va = line d[line a + line c];
+        line out.append(line va + (line d[line b + line c] - line va) * line f);
+    }
+    return line out;
+}
+
+/** How much of the run cycle mixes in at speed (blocks per tick). */
+function runWeight(speed: num): num {
+    return num.clamp((speed - 0.17) / 0.08, 0, 1);
+}
+
+/** Walk phase degrees per block moved: a walk cycle covers about a block,
+ * a run cycle nearly two. */
+function phaseRate(speed: num): num {
+    return 340 - 150 * runWeight(speed);
+}
+
+/** Locomotion pose: idle, walk and run mixed by speed (blocks per tick),
+ * the air pose off the ground. phase: walk phase (degrees), t: ticks. */
+function locoMix(speed: num, grounded: num, phase: num, t: num): list[num] {
+    if (grounded == 0) {
+        return clipPose("air", 0);
+    }
+    line idle = clipPose("idle", t / 60);
+    if (speed < 0.01) {
+        return line idle;
+    }
+    line walk = clipPose("walk", phase / 360);
+    line wWalk = num.min(1, speed / 0.06);
+    line wRun = runWeight(speed);
+    line out: list[num] = [];
+    if (line wRun > 0) {
+        line run = clipPose("run", phase / 360);
+        repeat (line c to 29) {
+            line m = mix(line idle[line c], line walk[line c], line wWalk);
+            line out.append(mix(line m, line run[line c], line wRun));
         }
     } else {
-        line p[12] = 28;
-        line p[14] = -12;
-        line p[6] = -25;
-        line p[9] = 10;
-        line p[8] = 22;
-        line p[11] = 22;
-        line p[1] = 6;
+        repeat (line c to 29) {
+            line out.append(mix(line idle[line c], line walk[line c], line wWalk));
+        }
     }
-    line p[5] = num.clamp(lookYaw, -65, 65);
-    line p[4] = num.clamp(lookPitch, -40, 50) - line p[1];
-    return line p;
+    return line out;
+}
+
+/** Adds stance clip `name` (its offsets from the rest pose) to pose. */
+function addStance(pose: list[num], name: str): list[num] {
+    if (name == "") {
+        return pose;
+    }
+    if (!global stanceDelta.hasKeys(name)) {
+        line st = clipPose(name, 0);
+        line rest = poseZero();
+        line dl: list[num] = [];
+        repeat (line c to 29) {
+            line dl.append(line st[line c] - line rest[line c]);
+        }
+        global stanceDelta[name] = line dl;
+    }
+    line dl = global stanceDelta[name] as list[num];
+    line out = pose;
+    repeat (line c to 29) {
+        if (line dl[line c] != 0) {
+            line out[line c] = pose[line c] + line dl[line c];
+        }
+    }
+    return line out;
+}
+
+/** Blends action clip `name` at time t over pose with weight w. Clips
+ * marked upper leave the legs and the root to the pose. */
+function blendAction(pose: list[num], name: str, t: num, w: num): list[num] {
+    line act = clipPose(name, t);
+    line upper = (global animMeta[name] as list[num])[4];
+    line out = pose;
+    repeat (line c to 29) {
+        if (line upper == 0 || (line c >= 5 && line c <= 17) || line c >= 24) {
+            line d = line act[line c] - pose[line c];
+            if (line c <= 2) {
+                // Root turns the shorter way round (a roll's 360 is 0).
+                line d = (line d + 900) % 360 - 180;
+            }
+            line out[line c] = pose[line c] + line d * w;
+        }
+    }
+    return line out;
+}
+
+/** Weight of an action at normalized time t: a quick blend in and out
+ * (hold 1: stays at the end, like death). */
+function actionWeight(t: num, hold: num): num {
+    if (hold == 1) {
+        return num.min(1, t / 0.08);
+    }
+    return num.clamp(num.min(t / 0.08, (1 - t) / 0.15), 0, 1);
+}
+
+/** Turns the head toward where the camera looks: lookYaw (degrees, Minecraft
+ * sense, relative to the body) and lookPitch (positive looks down). */
+function headLook(pose: list[num], lookYaw: num, lookPitch: num): list[num] {
+    line out = pose;
+    line out[9] = pose[9] - num.clamp(lookYaw, -65, 65);
+    line out[8] = pose[8] + num.clamp(lookPitch, -40, 45) - pose[5] * 0.6;
+    return line out;
+}
+
+/** Stance clip for weapon animation class cls ("" for none). */
+function stanceOf(cls: str): str {
+    if (cls == "fist") {
+        return "";
+    }
+    if (cls == "bow" || cls == "crossbow") {
+        return "hold_bow";
+    }
+    if (cls == "staff") {
+        return "hold_staff";
+    }
+    if (cls == "heavy" || cls == "scythe" || cls == "polearm" || cls == "spear") {
+        return "hold_2h";
+    }
+    return "hold_1h";
+}
+
+/** Attack clip for weapon class cls and combo step (1-3 light, 4 heavy). */
+function attackClip(cls: str, step: num): str {
+    if (cls == "heavy" || cls == "scythe") {
+        return "atk_heavy_%var(step)";
+    }
+    if (cls == "polearm") {
+        if (step == 1) {
+            return "atk_spear_1";
+        }
+        return "atk_heavy_%var(step)";
+    }
+    if (cls == "spear" || cls == "dagger" || cls == "fist") {
+        return "atk_%var(cls)_%var(step)";
+    }
+    if (cls == "staff" || cls == "wand") {
+        if (step == 4) {
+            return "atk_staff_4";
+        }
+        return "atk_staff_1";
+    }
+    return "atk_blade_%var(step)";
+}
+
+/** Clip of weapon art a. */
+function artClip(a: str): str {
+    if (a == "whirlwind") {
+        return "art_spin";
+    }
+    if (a == "slam") {
+        return "art_slam";
+    }
+    if (a == "warcry" || a == "secondwind") {
+        return "art_roar";
+    }
+    if (a == "lunge") {
+        return "atk_spear_4";
+    }
+    if (a == "cleave") {
+        return "atk_heavy_1";
+    }
+    return "cast";
 }

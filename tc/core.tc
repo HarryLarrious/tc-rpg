@@ -107,7 +107,7 @@ function playerTick {
     combatTick(line uuid);
 
     // Animation: walk phase from the distance moved.
-    line ph = global pPhase[line uuid] + line speed * 230;
+    line ph = global pPhase[line uuid] + line speed * phaseRate(line speed);
     global pPhase[line uuid] = line ph % 360;
     line eye = default.eyeLocation;
     line camYaw = line eye.getCoordinate(coord="Yaw");
@@ -116,8 +116,11 @@ function playerTick {
         designerFace(line uuid, line camYaw);
     }
     line yaw = global pYaw[line uuid];
-    line pose = locoPose(line speed, global pGround[line uuid], line ph, global tick, wrapDeg(line camYaw - line yaw), 0 - line camPitch);
+    line pose = locoMix(line speed, global pGround[line uuid], line ph, global tick);
     line pose = actionPose(line uuid, line pose);
+    if (global pAct[line uuid] != "dodge" && global pAct[line uuid] != "dead") {
+        line pose = headLook(line pose, wrapDeg(line camYaw - line yaw), line camPitch);
+    }
     rigRender(line uuid, line yaw, line pose);
     if (global tick % 2 == 0) {
         hudTick(line uuid);

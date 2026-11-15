@@ -3,8 +3,8 @@
 # packUrl() in tc/pack.tc at it.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-for g in pack/src/character.py pack/src/weapons.py pack/src/ui.py; do
-    [ -f "$g" ] && python3 "$g"
+for g in pack/src/character.py pack/src/anim_clips.py pack/src/weapons.py pack/src/ui.py; do
+    [ -f "$g" ] && (cd pack/src && python3 "$(basename "$g")")
 done
 url=$(python3 tools/build_pack.py --publish --push | tee /dev/stderr | sed -n 's/^url: //p')
 [ -n "$url" ] || { echo "no url" >&2; exit 1; }

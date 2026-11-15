@@ -1,5 +1,7 @@
-// The character rig: six body-part item displays plus two held items,
-// riding an invisible body entity (see PLAN.md, "Character rig").
+// The character rig: ten body-part item displays (head, torso, upper arms,
+// forearms, thighs, shins) plus two held items, riding an invisible body
+// entity (see PLAN.md, "Character rig"). tools/viewer/rig.js mirrors the
+// math in rigRender: keep the two in step.
 //
 // A rig is keyed by a rig id (the player's UUID, or "npc<n>"). Each part's
 // item carries the appearance in its custom model data: strings pick the
@@ -8,7 +10,8 @@
 // Frames: the character frame has +X left, +Y up, +Z forward. Model pixels
 // are 1/16 block at scale 1; a part's pivot is its model origin.
 
-/** Per rig: display UUIDs [head, torso, armR, armL, legR, legL, main, off]. */
+/** Per rig: display UUIDs [head, torso, uarmR, uarmL, farmR, farmL,
+ * thighR, thighL, shinR, shinL, main, off]. */
 declare global rigParts: dict[list];
 /** Per rig: appearance dict (see appDefault). */
 declare global rigApp: dict[dict];
@@ -16,24 +19,10 @@ declare global rigApp: dict[dict];
 declare global rigBody: dict[str];
 /** Height of a rider's origin above the body's feet (blocks). */
 declare global rigRideY: num;
+/** Per rig: left-hand IK offset along a two-handed weapon (px), 0 none. */
+declare global rigIk: dict[num];
 /** Interpolation ticks used for each pose update, per rig. */
 declare global rigInterp: dict[num];
-
-/** Pose list indices (degrees, or model pixels for bob). */
-function poseLen(): num {
-    return 23;
-}
-
-/** A neutral standing pose. Indices: 1-3 torso pitch/yaw/roll, 4-5 head
- * pitch/yaw, 6-8 right arm pitch/yaw/out, 9-11 left arm pitch/yaw/out,
- * 12-13 right leg pitch/out, 14-15 left leg pitch/out, 16 bob (px),
- * 17-19 main item pitch/yaw/roll, 20-22 off item pitch/yaw/roll, 23 whole
- * body pitch about the hips (rolls, falling down).
- * Positive limb pitch swings the limb forward; positive "out" moves it
- * away from the body. */
-function poseZero(): list[num] {
-    return [0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-}
 
 /** A plain appearance (a human man in brown clothes). */
 function appDefault(): dict {
@@ -54,9 +43,25 @@ function helmHidesHair(kind: str): num {
     return 0;
 }
 
-/** The item for body part `part` (head, torso, arm, leg) of appearance app. */
+/** Item model of each body display, in rigParts order. */
+function rigPartNames(): list[str] {
+    return ["head", "torso", "uarm", "uarm", "farm", "farm", "thigh", "thigh", "shin", "shin"];
+}
+
+/** Armor slot that dresses body part `part`. */
+function rigPartSlot(part: str): str {
+    if (part == "uarm" || part == "farm") {
+        return "arm";
+    }
+    if (part == "thigh" || part == "shin") {
+        return "leg";
+    }
+    return part;
+}
+
+/** The item for body part `part` (see rigPartNames) of appearance app. */
 function rigPartItem(app: dict, part: str): item {
-    line armor = (app["armor"] as dict)[part] as list;
+    line armor = (app["armor"] as dict)[rigPartSlot(part)] as list;
     line kind = line armor[1] as str;
     line main = line armor[2] as num;
     line trim = line armor[3] as num;
@@ -96,6 +101,23 @@ function rigHeldItem(spec: str): item {
     return line it;
 }
 
+/** Left-hand IK offset (px along the weapon from the right fist) for held
+ * item spec `spec`, 0 when the weapon is held in one hand. Mirrors
+ * ikOffset() in tools/viewer/viewer.js. */
+function rigIkOffset(spec: str): num {
+    if (spec == "") {
+        return 0;
+    }
+    line t = ((spec.split("|"))[1] as str).replace("rpg:weapon/", "");
+    if (line t == "greatsword" || line t == "greataxe" || line t == "warhammer" || line t == "scythe") {
+        return -3.6;
+    }
+    if (line t == "spear" || line t == "halberd") {
+        return 7;
+    }
+    return 0;
+}
+
 /** Spawns the rig `rid` riding body entity `body`. */
 function rigSpawn(rid: str, body: str, at: loc, app: dict) {
     rigRemove(rid);
@@ -105,9 +127,11 @@ function rigSpawn(rid: str, body: str, at: loc, app: dict) {
     if (!global rigBuild.hasKeys("m")) {
         loadRigData();
     }
+    if (!global animMeta.hasKeys("idle")) {
+        loadAnimData();
+    }
     line ids: list[str] = [];
-    line parts = ["head", "torso", "arm", "arm", "leg", "leg"];
-    for (line p of line parts) {
+    for (line p of rigPartNames()) {
         game.spawnItemDisplay(at, rigPartItem(app, line p as str));
         line ids.append(lastEntity.uuid);
     }
@@ -135,6 +159,7 @@ function rigSpawn(rid: str, body: str, at: loc, app: dict) {
     select reset;
     global rigParts[rid] = line ids;
     global rigApp[rid] = app;
+    global rigIk[rid] = rigIkOffset(app["main"] as str);
     global rigBody[rid] = body;
     global rigInterp[rid] = 2;
 }
@@ -158,17 +183,18 @@ function rigRefresh(rid: str, app: dict) {
         return;
     }
     global rigApp[rid] = app;
+    global rigIk[rid] = rigIkOffset(app["main"] as str);
     line ids = global rigParts[rid] as list[str];
-    line parts = ["head", "torso", "arm", "arm", "leg", "leg"];
-    repeat (line i to 6) {
+    line parts = rigPartNames();
+    repeat (line i to 10) {
         select entitiesByName(line ids[line i]);
         selectedEntity.setItemDisplayItem(rigPartItem(app, line parts[line i] as str));
         select reset;
     }
-    select entitiesByName(line ids[7]);
+    select entitiesByName(line ids[11]);
     selectedEntity.setItemDisplayItem(rigHeldItem(app["main"] as str));
     select reset;
-    select entitiesByName(line ids[8]);
+    select entitiesByName(line ids[12]);
     selectedEntity.setItemDisplayItem(rigHeldItem(app["off"] as str));
     select reset;
 }
@@ -212,11 +238,11 @@ function rigSetMatrix(id: str, m: list[num], interp: num) {
 }
 
 /** Poses rig `rid`: yaw (Minecraft degrees) turns the whole character, pose
- * is a list from poseZero. Returns the world offset of the right hand from
- * the feet (blocks). */
+ * is a list of animation channels (see chan() and pack/src/anim_clips.py).
+ * Returns the world offset of the right hand from the feet (blocks). */
 function rigRender(rid: str, yaw: num, pose: list[num]): vec {
     line ids = global rigParts[rid] as list[str];
-    if (line ids.len() != 8) {
+    if (line ids.len() != 12) {
         global rigParts.remove(rid);
         return vec(0, 0, 0);
     }
@@ -224,60 +250,106 @@ function rigRender(rid: str, yaw: num, pose: list[num]): vec {
     line rb = global rigBuild[line app["build"] as str] as list[num];
     line hipY = line rb[1];
     line hipX = line rb[2];
-    line neckY = line rb[3];
-    line shX = line rb[4];
-    line shY = line rb[5];
-    line armLen = line rb[6];
     line s = (line app["scale"] as num) * 0.9;
     line px = line s / 16;
     line interp = global rigInterp[rid];
 
-    // Root frame from the yaw.
+    // Root frame from the yaw. Bob and fwd are keyed for hips 12 px up.
     line L = vec(num.cos(yaw), 0, num.sin(yaw));
     line U = vec(0, 1, 0);
     line F = vec(0 - num.sin(yaw), 0, num.cos(yaw));
-    line base = vec(0, 0 - global rigRideY + pose[16] * line px, 0);
-    line hip = line base + U * (line hipY * line px);
-    if (pose[23] != 0) {
-        // Whole-body pitch about the hips.
-        line U = U.rotateAroundVec(L, 0 - pose[23]);
-        line F = F.rotateAroundVec(L, 0 - pose[23]);
+    line kb = line hipY / 12 * line px;
+    line hip = vec(0, 0 - global rigRideY, 0) + U * (pose[3] * line kb + line hipY * line px) + F * (pose[4] * line kb);
+    // Whole body about the hips: pitch tips forward, roll to its left.
+    if (pose[1] != 0) {
+        line U = U.rotateAroundVec(L, pose[1]);
+        line F = F.rotateAroundVec(L, pose[1]);
+    }
+    if (pose[2] != 0) {
+        line U = U.rotateAroundVec(F, 0 - pose[2]);
+        line L = L.rotateAroundVec(F, 0 - pose[2]);
     }
 
-    // Torso.
-    line tb = basisRot(L, U, F, pose[1], pose[2], pose[3]);
+    // Torso, and the head at the neck.
+    line tb = basisRot(L, U, F, 0 - pose[5], pose[6], 0 - pose[7]);
     line ta = line tb[1];
     line tu = line tb[2];
     line tf = line tb[3];
     rigSetMatrix(line ids[2], rigMatrix(line ta, line tu, line tf, line s, line hip), line interp);
-
-    // Head, at the neck.
-    line neck = line hip + line tu * ((line neckY - line hipY) * line px);
-    line hb = basisRot(line ta, line tu, line tf, pose[4], pose[5], 0);
+    line neck = line hip + line tu * ((line rb[3] - line hipY) * line px);
+    line hb = basisRot(line ta, line tu, line tf, 0 - pose[8], pose[9], 0);
     rigSetMatrix(line ids[1], rigMatrix(line hb[1], line hb[2], line hb[3], line s, line neck), line interp);
 
-    // Arms from the shoulders. Right arm "out" rolls toward -left.
-    line shoulder = line hip + line tu * ((line shY - line hipY) * line px);
-    line shR = line shoulder - line ta * (line shX * line px);
-    line shL = line shoulder + line ta * (line shX * line px);
-    line ar = basisRot(line ta, line tu, line tf, pose[6], pose[7], 0 - pose[8]);
-    rigSetMatrix(line ids[3], rigMatrix(line ar[1], line ar[2], line ar[3], line s, line shR), line interp);
-    line al = basisRot(line ta, line tu, line tf, pose[9], pose[10], pose[11]);
-    rigSetMatrix(line ids[4], rigMatrix(line al[1], line al[2], line al[3], line s, line shL), line interp);
+    // Arms: upper arm from the shoulder, forearm from the elbow; "out"
+    // moves the arm away from the body.
+    line shoulder = line hip + line tu * ((line rb[5] - line hipY) * line px);
+    line uaLen = line rb[6] * line px;
+    line faLen = line rb[7] * line px;
+    line shR = line shoulder - line ta * (line rb[4] * line px);
+    line ur = basisRot(line ta, line tu, line tf, pose[10], pose[11], 0 - pose[12]);
+    rigSetMatrix(line ids[3], rigMatrix(line ur[1], line ur[2], line ur[3], line s, line shR), line interp);
+    line elR = line shR - (line ur[2] as vec) * line uaLen;
+    line fr = basisRot(line ur[1], line ur[2], line ur[3], pose[13], 0, 0);
+    rigSetMatrix(line ids[5], rigMatrix(line fr[1], line fr[2], line fr[3], line s, line elR), line interp);
+    line shL = line shoulder + line ta * (line rb[4] * line px);
+    line ul = basisRot(line ta, line tu, line tf, pose[14], pose[15], pose[16]);
+    line elL = line shL - (line ul[2] as vec) * line uaLen;
+    line fl = basisRot(line ul[1], line ul[2], line ul[3], pose[17], 0, 0);
+    line gripL = line elL - (line fl[2] as vec) * line faLen;
+    line ik = global rigIk[rid];
+    if (line ik != 0) {
+        // Two-handed: the left hand takes the handle ik px along the weapon
+        // from the right fist (two-bone IK, the elbow out and down).
+        line wr = basisRot(line fr[1], line fr[3], (line fr[2] as vec) * -1, pose[24], pose[25], pose[26]);
+        line gripL = line elR - (line fr[2] as vec) * line faLen + (line wr[2] as vec) * (line ik * line px);
+        line toT = line gripL - line shL;
+        line dist = num.clamp(line toT.len(), num.abs(line uaLen - line faLen) + 0.001, line uaLen + line faLen - 0.001);
+        line n = line toT.setLength(1) as vec;
+        line cosA = num.clamp((line uaLen * line uaLen + line dist * line dist - line faLen * line faLen) / (2 * line uaLen * line dist), -1, 1);
+        line pole = line ta * 0.7 - line tu - line tf * 0.4;
+        line pp = (line pole - line n * (line pole.dot(line n) as num)).setLength(1) as vec;
+        line u = (line n * line cosA + line pp * (1 - line cosA * line cosA) ** 0.5) as vec;
+        line elL = line shL + line u * line uaLen;
+        line w = (line shL + line n * line dist - line elL).setLength(1) as vec;
+        line uc = (line w - line u * (line w.dot(line u) as num)) as vec;
+        if (line uc.len() < 0.001) {
+            line uc = (line tf - line u * (line tf.dot(line u) as num)) as vec;
+        }
+        line ub = (line u * -1) as vec;
+        line ucn = line uc.setLength(1) as vec;
+        line ua = line ub.cross(line ucn) as vec;
+        line ul = [line ua, line ub, line ucn];
+        line fb = (line w * -1) as vec;
+        line fc = line ua.cross(line fb) as vec;
+        line fl = [line ua, line fb, line fc];
+    }
+    rigSetMatrix(line ids[4], rigMatrix(line ul[1], line ul[2], line ul[3], line s, line shL), line interp);
+    rigSetMatrix(line ids[6], rigMatrix(line fl[1], line fl[2], line fl[3], line s, line elL), line interp);
 
-    // Legs from the hips (root frame, not the torso's).
-    line lr = basisRot(L, U, F, pose[12], 0, 0 - pose[13]);
-    rigSetMatrix(line ids[5], rigMatrix(line lr[1], line lr[2], line lr[3], line s, line hip - L * (line hipX * line px)), line interp);
-    line ll = basisRot(L, U, F, pose[14], 0, pose[15]);
-    rigSetMatrix(line ids[6], rigMatrix(line ll[1], line ll[2], line ll[3], line s, line hip + L * (line hipX * line px)), line interp);
+    // Legs from the hips (root frame, not the torso's); knees bend back.
+    line thLen = line rb[8] * line px;
+    line hR = line hip - L * (line hipX * line px);
+    line tr = basisRot(L, U, F, pose[18], 0, 0 - pose[19]);
+    rigSetMatrix(line ids[7], rigMatrix(line tr[1], line tr[2], line tr[3], line s, line hR), line interp);
+    line sr = basisRot(line tr[1], line tr[2], line tr[3], 0 - pose[20], 0, 0);
+    rigSetMatrix(line ids[9], rigMatrix(line sr[1], line sr[2], line sr[3], line s, line hR - (line tr[2] as vec) * line thLen), line interp);
+    line hL = line hip + L * (line hipX * line px);
+    line tl = basisRot(L, U, F, pose[21], 0, pose[22]);
+    rigSetMatrix(line ids[8], rigMatrix(line tl[1], line tl[2], line tl[3], line s, line hL), line interp);
+    line sl = basisRot(line tl[1], line tl[2], line tl[3], 0 - pose[23], 0, 0);
+    rigSetMatrix(line ids[10], rigMatrix(line sl[1], line sl[2], line sl[3], line s, line hL - (line tl[2] as vec) * line thLen), line interp);
 
     // Held items in the fists: the item's +Y points out of the fist along
-    // the arm's forward, its +Z along the arm's down.
-    line handR = line shR - (line ar[2] as vec) * ((line armLen - 3) * line px);
-    line wb = basisRot(line ar[1], line ar[3], (line ar[2] as vec) * -1, pose[17], pose[18], pose[19]);
-    rigSetMatrix(line ids[7], rigMatrix(line wb[1], line wb[2], line wb[3], line s, line handR), line interp);
-    line handL = line shL - (line al[2] as vec) * ((line armLen - 3) * line px);
-    line ob = basisRot(line al[1], line al[3], (line al[2] as vec) * -1, pose[20], pose[21], pose[22]);
-    rigSetMatrix(line ids[8], rigMatrix(line ob[1], line ob[2], line ob[3], line s, line handL), line interp);
-    return line handR + vec(0, global rigRideY, 0);
+    // the forearm's forward, its +Z down the forearm.
+    line gripR = line elR - (line fr[2] as vec) * line faLen;
+    line wb = basisRot(line fr[1], line fr[3], (line fr[2] as vec) * -1, pose[24], pose[25], pose[26]);
+    rigSetMatrix(line ids[11], rigMatrix(line wb[1], line wb[2], line wb[3], line s, line gripR), line interp);
+    line ob = basisRot(line fl[1], line fl[3], (line fl[2] as vec) * -1, pose[27], pose[28], pose[29]);
+    line os = line s;
+    if (line ik != 0) {
+        // The left hand is on the two-handed weapon: nothing else in it.
+        line os = 0;
+    }
+    rigSetMatrix(line ids[12], rigMatrix(line ob[1], line ob[2], line ob[3], line os, line gripL), line interp);
+    return line gripR + vec(0, global rigRideY, 0);
 }

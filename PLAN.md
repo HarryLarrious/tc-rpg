@@ -50,17 +50,18 @@ DiamondFire cannot force the F5 camera, so the game builds its own:
 
 ## Character rig
 
-Every character (players and NPCs) is 6 body-part item displays plus up to
-2 held-item displays. Parts: head, torso, right/left arm, right/left leg.
-Each part item uses one item model (`rpg:body/<part>`) that is a
-**composite** of layers picked by the item's custom model data strings and
-colored by its custom model data colors:
+Every character (players and NPCs) is 10 body-part item displays plus 2
+held-item displays: head, torso, upper arms, forearms (with hands), thighs
+and shins (with feet), so elbows and knees bend. Each part item uses one
+item model (`rpg:body/<part>`: head, torso, uarm, farm, thigh, shin) that
+is a **composite** of layers picked by the item's custom model data strings
+and colored by its custom model data colors:
 
 | String index | Layer |
 | --- | --- |
-| 0 | body shape: `<sex><build>` e.g. `m`, `f`, `md` (dwarf), `mb` (beast) |
-| 1 | armor piece on this part (`none`, `leather`, `chain`, `plate`, ...) |
-| 2 | hair style (head) or tail style (torso) |
+| 0 | build: `m`, `f`, `dm`, `df` (dwarf builds are short and stocky) |
+| 1 | armor piece on this part (`leather`, `chain`, `plate`, ...); arm armor dresses upper arm and forearm, leg armor thigh and shin |
+| 2 | hair style (head) or tail (torso) |
 | 3 | ears / horns (head) |
 | 4 | beard (head) |
 
@@ -73,13 +74,27 @@ colored by its custom model data colors:
 | 4 | armor main |
 | 5 | armor trim |
 | 6 | horns / claws |
+| 7 | trousers |
 
-`pack/src/character.py` generates the models and textures and writes
-`tc/rig_data.tc` (pivots, sizes). Height is a uniform scale on the root
-matrix. Animation is computed in `tc/rig.tc`: each part has a pivot and a
-rotation, combined with the root (position, yaw, scale) into the display's
-transformation matrix every tick for players and every few ticks (with
-interpolation) for NPCs.
+`pack/src/character.py` generates the models (chamfered boxes and angled
+bars, so hair falls in locks and limbs read round) and writes
+`tc/rig_data.tc` (joint positions and bone lengths per build).
+
+Animation is keyframed in `pack/src/anim_clips.py`: 29 channels (root
+pitch/roll, bob, torso, head, shoulders, elbows, hips, knees, held items),
+Catmull-Rom between keys, sampled into `tc/anim_data.tc`. Clips can be
+planted: the generator lifts or lowers the body each sample so its lowest
+point touches the ground. In game (`tc/anim.tc`) locomotion mixes idle,
+walk and run by speed, a weapon stance is added on top, and an action clip
+(attacks, roll, cast, death...) blends over it. `tc/rig.tc` turns the pose
+into display matrices every tick (players) or every few ticks (NPCs); for
+two-handed weapons the left arm is solved by two-bone IK to the handle.
+
+`tools/viewer/` shows the pack's models and the clips in a browser with
+the same rig math (`rig.js` mirrors `rig.tc` and `anim.tc`): serve the repo
+root (`python3 -m http.server 8137`) and open `/tools/viewer/`. It has a
+filmstrip mode, joint markers and the weapon arc, and keeps its settings in
+the URL.
 
 ## Races
 

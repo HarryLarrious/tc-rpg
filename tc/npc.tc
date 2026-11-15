@@ -711,16 +711,13 @@ function npcStep(id: str) {
     // Animate only when someone can see it, idle ones only up close.
     if (line near < 48 && (line v.len() > 0.01 || line near < 16) && global rigParts.hasKeys(id)) {
         line sp = line v.len();
-        line ph = (global nPhase[id] + line sp * 230 * 4) % 360;
+        line ph = (global nPhase[id] + line sp * phaseRate(line sp) * 4) % 360;
         global nPhase[id] = line ph;
-        line pose = locoPose(line sp, 1, line ph, global tick, 0, 0);
+        line pose = locoMix(line sp, 1, line ph, global tick);
         if (line greet == 1) {
-            // A small wave.
-            line pose[9] = 150 + num.sin(global tick * 25) * 20;
-            line pose[11] = 20;
-        }
-        if (global nAct[id] == "social" && line path.len() == 0) {
-            line pose[6] = 30 + num.sin(global tick * 9) * 25;
+            line pose = blendAction(line pose, "wave", global tick / 24, 1);
+        } else if (global nAct[id] == "social" && line path.len() == 0) {
+            line pose = blendAction(line pose, "talk", global tick / 50, 1);
         }
         rigRender(id, global nYaw[id], line pose);
     }

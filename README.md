@@ -63,8 +63,9 @@ format 97.1. Design notes and decisions: [PLAN.md](PLAN.md).
 
 | Path | Contents |
 | --- | --- |
-| [tc/](tc/) | Plot code. `core.tc` join/loop/commands, `body.tc` body and camera, `rig.tc` character model, `anim.tc` poses, `combat.tc`, `arts.tc`, `magic.tc`, `proj.tc`, `fx.tc`, `monsters.tc`, `npc.tc`, `town.tc`, `quests.tc`, `ui.tc`, `designer.tc`, `items.tc`, `player.tc`, `race.tc`, `world_*.tc`, `buildings.tc`, `pois.tc`, `loop.tc` |
-| [pack/src/](pack/src/) | Pack generators: `character.py` (body, armor, hair, ears, beards, tails; writes `tc/rig_data.tc`), `weapons.py` (weapons and effects), `ui.py` (HUD, icons) |
+| [tc/](tc/) | Plot code. `core.tc` join/loop/commands, `body.tc` body and camera, `rig.tc` character model, `anim.tc` animation mixing, `anim_data.tc` clips (generated), `combat.tc`, `arts.tc`, `magic.tc`, `proj.tc`, `fx.tc`, `monsters.tc`, `npc.tc`, `town.tc`, `quests.tc`, `ui.tc`, `designer.tc`, `items.tc`, `player.tc`, `race.tc`, `world_*.tc`, `buildings.tc`, `pois.tc`, `loop.tc` |
+| [pack/src/](pack/src/) | Pack generators: `character.py` (body, armor, hair, ears, beards, tails; writes `tc/rig_data.tc`), `anim_clips.py` (animation clips; writes `tc/anim_data.tc`), `weapons.py` (weapons and effects), `ui.py` (HUD, icons) |
+| [tools/viewer/](tools/viewer/) | Model and animation viewer: serve the repo root with `python3 -m http.server 8137`, open `/tools/viewer/` |
 | [tools/worldgen.py](tools/worldgen.py) | Python mirror of the town planner; draws [map/preview.png](map/preview.png) and `map/town.png` |
 | [tools/release_pack.sh](tools/release_pack.sh) | Regenerates the pack, publishes it to `pack-dist` and sets `packUrl()` |
 | [tools/build_pack.py](tools/build_pack.py) | Validates and zips the pack |

@@ -1,0 +1,99 @@
+{
+ "builds": {
+  "m": {
+   "hip": 12,
+   "hx": 2.0,
+   "neck": 24,
+   "sx": 5.9,
+   "sy": 22.4,
+   "ua": 5.8,
+   "fa": 4.6,
+   "th": 6.0,
+   "sh": 6.0,
+   "td": 4.4
+  },
+  "f": {
+   "hip": 12,
+   "hx": 1.9,
+   "neck": 24,
+   "sx": 5.1,
+   "sy": 22.5,
+   "ua": 5.8,
+   "fa": 4.6,
+   "th": 6.0,
+   "sh": 6.0,
+   "td": 4.0
+  },
+  "dm": {
+   "hip": 8,
+   "hx": 2.5,
+   "neck": 18.5,
+   "sx": 7.2,
+   "sy": 17.0,
+   "ua": 4.6,
+   "fa": 4.0,
+   "th": 4.0,
+   "sh": 4.0,
+   "td": 5.8
+  },
+  "df": {
+   "hip": 8,
+   "hx": 2.3,
+   "neck": 18.5,
+   "sx": 6.4,
+   "sy": 17.0,
+   "ua": 4.6,
+   "fa": 4.0,
+   "th": 4.0,
+   "sh": 4.0,
+   "td": 5.2
+  }
+ },
+ "armors": [
+  "leather",
+  "chain",
+  "scale",
+  "plate",
+  "robe",
+  "ranger",
+  "noble",
+  "bone"
+ ],
+ "hairs": [
+  "short",
+  "long",
+  "ponytail",
+  "braid",
+  "bun",
+  "mohawk",
+  "curly",
+  "spiky",
+  "bob",
+  "shaggy"
+ ],
+ "ears": [
+  "human",
+  "elf",
+  "cat",
+  "wolf",
+  "bear",
+  "rabbit",
+  "demon"
+ ],
+ "beards": [
+  "stubble",
+  "short",
+  "full",
+  "long",
+  "braided",
+  "goatee",
+  "mustache"
+ ],
+ "tails": [
+  "cat",
+  "wolf",
+  "bear",
+  "rabbit",
+  "demon"
+ ]
+}

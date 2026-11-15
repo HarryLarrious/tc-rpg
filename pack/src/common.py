@@ -143,7 +143,8 @@ class Model:
     def box(self, a, b, tex: str, tint: int | None = None, rot=None, light: int = 0,
             faces=FACES, uv_seed: int = 0) -> None:
         """Adds the box from corner a to corner b. rot = (axis, angle,
-        origin) with angle a multiple of 22.5 in -45..45."""
+        origin) for one axis, or ("xyz", (x, y, z), origin) for Euler angles
+        (applied X, then Y, then Z, right-handed, about origin)."""
         a = [x * self.k for x in a]
         b = [x * self.k for x in b]
         lo = [min(a[i], b[i]) for i in range(3)]
@@ -171,10 +172,52 @@ class Model:
         el = {"from": [rnd(x + 8) for x in lo], "to": [rnd(x + 8) for x in hi], "faces": fd}
         if rot is not None:
             axis, angle, origin = rot
-            el["rotation"] = {"angle": angle, "axis": axis, "origin": [rnd(o * self.k + 8) for o in origin]}
+            org = [rnd(o * self.k + 8) for o in origin]
+            if axis == "xyz":
+                el["rotation"] = {"x": rnd(angle[0]), "y": rnd(angle[1]), "z": rnd(angle[2]), "origin": org}
+            else:
+                el["rotation"] = {"angle": rnd(angle), "axis": axis, "origin": org}
         if light:
             el["light_emission"] = light
         self.elements.append(el)
+
+    def rbox(self, a, b, tex: str, tint: int | None = None, r: float = 0.45, rot=None, light: int = 0) -> None:
+        """A box with chamfered edges: three boxes, each inset by r on the
+        other two axes, so no corner is a hard 90 degree step."""
+        lo = [min(a[i], b[i]) for i in range(3)]
+        hi = [max(a[i], b[i]) for i in range(3)]
+        r = min(r, *((hi[i] - lo[i]) / 2.5 for i in range(3)))
+        if r <= 0.05:
+            self.box(lo, hi, tex, tint, rot=rot, light=light)
+            return
+        for ax in range(3):
+            a2, b2 = list(lo), list(hi)
+            for o in range(3):
+                if o != ax:
+                    a2[o] += r
+                    b2[o] -= r
+            self.box(a2, b2, tex, tint, rot=rot, light=light)
+
+    def seg(self, p1, p2, w: float, d: float, tex: str, tint: int | None = None, twist: float = 0,
+            round_: bool = False, light: int = 0) -> None:
+        """A w x d bar from point p1 to point p2 (its long axis), rotated to
+        lie along p2 - p1, with an optional twist about that axis."""
+        dx, dy, dz = (p2[i] - p1[i] for i in range(3))
+        L = math.sqrt(dx * dx + dy * dy + dz * dz)
+        if L < 1e-6:
+            return
+        dx, dy, dz = dx / L, dy / L, dz / L
+        # Y -> d with Rx(a) then Rz(c) (the element's X, Y, Z order).
+        a = math.degrees(math.asin(max(-1.0, min(1.0, dz))))
+        c = math.degrees(math.atan2(-dx, dy))
+        cx, cy, cz = ((p1[i] + p2[i]) / 2 for i in range(3))
+        lo = (cx - w / 2, cy - L / 2, cz - d / 2)
+        hi = (cx + w / 2, cy + L / 2, cz + d / 2)
+        rot = ("xyz", (a, twist, c), (cx, cy, cz))
+        if round_:
+            self.rbox(lo, hi, tex, tint, r=min(w, d) * 0.22, rot=rot, light=light)
+        else:
+            self.box(lo, hi, tex, tint, rot=rot, light=light)
 
     def json(self) -> dict:
         for el in self.elements:
