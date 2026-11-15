@@ -1,0 +1,15 @@
+// The resource pack: every player gets it on join, @pack sends it again.
+
+/** The published pack (tools/build_pack.py --publish prints it). */
+function packUrl(): str {
+    return "https://raw.githubusercontent.com/HarryLarrious/tc-rpg/pack-dist/rpg-pack-18eb4e336ebd.zip"; // pack url
+}
+
+/** Sends the resource pack to the player. */
+function packSend {
+    default.sendResourcePack(packUrl());
+}
+
+playerevent resourcePackDecline {
+    default.sendMessage(s"<red>Resource pack declined.</red> <gray>Characters, weapons and spells are drawn by it. Allow server resource packs and rejoin.");
+}

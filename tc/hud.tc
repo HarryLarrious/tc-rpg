@@ -1,0 +1,30 @@
+// The HUD: health, mana and stamina bars on the action bar.
+
+/** n bar cells as text. */
+function cells(n: num): str {
+    line s = "";
+    repeat (num.max(0, n)) {
+        line s = "%var(s)|";
+    }
+    return line s;
+}
+
+/** Draws the HUD of player uuid (default). Styled text resolves %var
+ * placeholders as plain text, so colors stay in the literal. */
+function hudTick(uuid: str) {
+    line hp = num.ceil(global pHp[uuid]);
+    line mhp = stat(uuid, "maxHp");
+    line mn = num.floor(global pMana[uuid]);
+    line mmn = stat(uuid, "maxMana");
+    line hf = num.clamp(num.round(line hp / line mhp * 20), 0, 20);
+    line mf = num.clamp(num.round(line mn / line mmn * 14), 0, 14);
+    line sf = num.clamp(num.round(global pSta[uuid] / stat(uuid, "maxSta") * 12), 0, 12);
+    line h1 = cells(line hf);
+    line h2 = cells(20 - line hf);
+    line m1 = cells(line mf);
+    line m2 = cells(14 - line mf);
+    line s1 = cells(line sf);
+    line s2 = cells(12 - line sf);
+    line extra = hudExtra(uuid);
+    default.sendActionBar(s"<#E0413A>❤ %var(hp) %var(h1)<dark_gray>%var(h2)  <#4AA3FF>✦ %var(mn) %var(m1)<dark_gray>%var(m2)  <#E8C547>⚡ %var(s1)<dark_gray>%var(s2) <white>%var(extra)");
+}

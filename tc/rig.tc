@@ -1,0 +1,259 @@
+// The character rig: six body-part item displays plus two held items,
+// riding an invisible body entity (see PLAN.md, "Character rig").
+//
+// A rig is keyed by a rig id (the player's UUID, or "npc<n>"). Each part's
+// item carries the appearance in its custom model data: strings pick the
+// layers (build, armor, hair/tail, ears, beard) and colors tint them.
+//
+// Frames: the character frame has +X left, +Y up, +Z forward. Model pixels
+// are 1/16 block at scale 1; a part's pivot is its model origin.
+
+/** Per rig: display UUIDs [head, torso, armR, armL, legR, legL, main, off]. */
+declare global rigParts: dict[list];
+/** Per rig: appearance dict (see appDefault). */
+declare global rigApp: dict[dict];
+/** Per rig: the body entity the displays ride. */
+declare global rigBody: dict[str];
+/** Height of a rider's origin above the body's feet (blocks). */
+declare global rigRideY: num;
+/** Interpolation ticks used for each pose update, per rig. */
+declare global rigInterp: dict[num];
+
+/** Pose list indices (degrees, or model pixels for bob). */
+function poseLen(): num {
+    return 22;
+}
+
+/** A neutral standing pose. Indices: 1-3 torso pitch/yaw/roll, 4-5 head
+ * pitch/yaw, 6-8 right arm pitch/yaw/out, 9-11 left arm pitch/yaw/out,
+ * 12-13 right leg pitch/out, 14-15 left leg pitch/out, 16 bob (px),
+ * 17-19 main item pitch/yaw/roll, 20-22 off item pitch/yaw/roll.
+ * Positive limb pitch swings the limb forward; positive "out" moves it
+ * away from the body. */
+function poseZero(): list[num] {
+    return [0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+}
+
+/** A plain appearance (a human man in brown clothes). */
+function appDefault(): dict {
+    return {
+        race: "human", build: "m", scale: 1,
+        skin: 0xE0AC85, hair: 0x5A3A22, eye: 0x3C6E9E, cloth: 0x8A6A45, pants: 0x4E4234, horn: 0x2B2420,
+        hairStyle: "short", ears: "human", beard: "", tail: "",
+        armor: {head: ["", 0, 0], torso: ["", 0, 0], arm: ["", 0, 0], leg: ["", 0, 0]},
+        main: "", off: ""
+    };
+}
+
+/** Helmets that cover the hair. */
+function helmHidesHair(kind: str): num {
+    if (kind == "chain" || kind == "scale" || kind == "plate" || kind == "bone" || kind == "ranger") {
+        return 1;
+    }
+    return 0;
+}
+
+/** The item for body part `part` (head, torso, arm, leg) of appearance app. */
+function rigPartItem(app: dict, part: str): item {
+    line armor = (app["armor"] as dict)[part] as list;
+    line kind = line armor[1] as str;
+    line main = line armor[2] as num;
+    line trim = line armor[3] as num;
+    line b = app["build"] as str;
+    line strs: list[str] = [line b, line kind];
+    if (part == "head") {
+        line hs = app["hairStyle"] as str;
+        line ears = app["ears"] as str;
+        if (helmHidesHair(line kind) == 1) {
+            line hs = "";
+            if (line ears == "human" || line ears == "elf") {
+                line ears = "";
+            }
+        }
+        line strs.append(line hs, line ears, app["beard"] as str);
+    } else if (part == "torso") {
+        line strs.append(app["tail"] as str);
+    }
+    line colors: list[num] = [app["skin"] as num, app["hair"] as num, app["eye"] as num, app["cloth"] as num, line main, line trim, app["horn"] as num, app["pants"] as num];
+    return item("paper").setModel("rpg:body/%var(part)").setModelDataStrings(line strs).setModelDataNumbers(line colors, type="Colors");
+}
+
+/** The item model of held item spec `spec` ("" for nothing). Specs are
+ * "<model>|<c1>|<c2>|<c3>" from itemHeldSpec. */
+function rigHeldItem(spec: str): item {
+    if (spec == "") {
+        return item("paper").setModel("rpg:empty");
+    }
+    line p = spec.split("|");
+    line it = item("paper").setModel(line p[1] as str);
+    if (line p.len() >= 4) {
+        line it = line it.setModelDataNumbers([num.parse(line p[2] as str), num.parse(line p[3] as str), num.parse(line p[4] as str)], type="Colors");
+    }
+    if (line p.len() >= 5) {
+        line it = line it.setModelDataStrings([line p[5] as str]);
+    }
+    return line it;
+}
+
+/** Spawns the rig `rid` riding body entity `body`. */
+function rigSpawn(rid: str, body: str, at: loc, app: dict) {
+    rigRemove(rid);
+    if (global rigRideY == 0) {
+        global rigRideY = 1.95;
+    }
+    if (!global rigBuild.hasKeys("m")) {
+        loadRigData();
+    }
+    line ids: list[str] = [];
+    line parts = ["head", "torso", "arm", "arm", "leg", "leg"];
+    for (line p of line parts) {
+        game.spawnItemDisplay(at, rigPartItem(app, line p as str));
+        line ids.append(lastEntity.uuid);
+    }
+    game.spawnItemDisplay(at, rigHeldItem(app["main"] as str));
+    line ids.append(lastEntity.uuid);
+    game.spawnItemDisplay(at, rigHeldItem(app["off"] as str));
+    line ids.append(lastEntity.uuid);
+    select entitiesByName(line ids);
+    selectedEntity.ride(body);
+    selectedEntity.setDisplayCullingSize(3, 3);
+    select reset;
+    global rigParts[rid] = line ids;
+    global rigApp[rid] = app;
+    global rigBody[rid] = body;
+    global rigInterp[rid] = 2;
+}
+
+/** Removes rig `rid`'s displays. */
+function rigRemove(rid: str) {
+    if (!global rigParts.hasKeys(rid)) {
+        return;
+    }
+    select entitiesByName(global rigParts[rid] as list[str]);
+    selectedEntity.remove();
+    select reset;
+    global rigParts.remove(rid);
+    global rigApp.remove(rid);
+    global rigBody.remove(rid);
+}
+
+/** Re-sends every part item (after an appearance or equipment change). */
+function rigRefresh(rid: str, app: dict) {
+    if (!global rigParts.hasKeys(rid)) {
+        return;
+    }
+    global rigApp[rid] = app;
+    line ids = global rigParts[rid] as list[str];
+    line parts = ["head", "torso", "arm", "arm", "leg", "leg"];
+    repeat (line i to 6) {
+        select entitiesByName(line ids[line i]);
+        selectedEntity.setItemDisplayItem(rigPartItem(app, line parts[line i] as str));
+        select reset;
+    }
+    select entitiesByName(line ids[7]);
+    selectedEntity.setItemDisplayItem(rigHeldItem(app["main"] as str));
+    select reset;
+    select entitiesByName(line ids[8]);
+    selectedEntity.setItemDisplayItem(rigHeldItem(app["off"] as str));
+    select reset;
+}
+
+/** Rotates basis vectors a, b, c (left, up, forward) by pitch (about a,
+ * positive swings -b toward +c), yaw (about b, positive turns c toward
+ * +a) and roll (about c, positive moves -b toward +a), in that order.
+ * Returns the new [a, b, c]. */
+function basisRot(a: vec, b: vec, c: vec, p: num, y: num, r: num): list[vec] {
+    line na = a;
+    line nb = b;
+    line nc = c;
+    if (y != 0) {
+        line nc = line nc.rotateAroundVec(line nb, y);
+        line na = line na.rotateAroundVec(line nb, y);
+    }
+    if (p != 0) {
+        line nb = line nb.rotateAroundVec(line na, 0 - p);
+        line nc = line nc.rotateAroundVec(line na, 0 - p);
+    }
+    if (r != 0) {
+        line nb = line nb.rotateAroundVec(line nc, r);
+        line na = line na.rotateAroundVec(line nc, r);
+    }
+    return [line na, line nb, line nc];
+}
+
+/** Row-major display matrix for a part with basis (a, b, c), scale s and
+ * translation t (blocks, relative to the display's origin). Undoes the
+ * display's 180 degree turn (model +X left, +Z forward). */
+function rigMatrix(a: vec, b: vec, c: vec, s: num, t: vec): list[num] {
+    return [0 - a.x * s, b.x * s, 0 - c.x * s, t.x, 0 - a.y * s, b.y * s, 0 - c.y * s, t.y, 0 - a.z * s, b.z * s, 0 - c.z * s, t.z, 0, 0, 0, 1];
+}
+
+/** Sets display `id` to matrix m with the rig's interpolation. */
+function rigSetMatrix(id: str, m: list[num], interp: num) {
+    select entitiesByName(id);
+    selectedEntity.setDisplayTransformationMatrix(m);
+    selectedEntity.setDisplayInterpolation(interp, 0);
+    select reset;
+}
+
+/** Poses rig `rid`: yaw (Minecraft degrees) turns the whole character, pose
+ * is a list from poseZero. Returns the world offset of the right hand from
+ * the feet (blocks). */
+function rigRender(rid: str, yaw: num, pose: list[num]): vec {
+    line ids = global rigParts[rid] as list[str];
+    line app = global rigApp[rid];
+    line rb = global rigBuild[line app["build"] as str] as list[num];
+    line hipY = line rb[1];
+    line hipX = line rb[2];
+    line neckY = line rb[3];
+    line shX = line rb[4];
+    line shY = line rb[5];
+    line armLen = line rb[6];
+    line s = (line app["scale"] as num) * 0.9;
+    line px = line s / 16;
+    line interp = global rigInterp[rid];
+
+    // Root frame from the yaw.
+    line L = vec(num.cos(yaw), 0, num.sin(yaw));
+    line U = vec(0, 1, 0);
+    line F = vec(0 - num.sin(yaw), 0, num.cos(yaw));
+    line base = vec(0, 0 - global rigRideY + pose[16] * line px, 0);
+    line hip = line base + U * (line hipY * line px);
+
+    // Torso.
+    line tb = basisRot(L, U, F, pose[1], pose[2], pose[3]);
+    line ta = line tb[1];
+    line tu = line tb[2];
+    line tf = line tb[3];
+    rigSetMatrix(line ids[2], rigMatrix(line ta, line tu, line tf, line s, line hip), line interp);
+
+    // Head, at the neck.
+    line neck = line hip + line tu * ((line neckY - line hipY) * line px);
+    line hb = basisRot(line ta, line tu, line tf, pose[4], pose[5], 0);
+    rigSetMatrix(line ids[1], rigMatrix(line hb[1], line hb[2], line hb[3], line s, line neck), line interp);
+
+    // Arms from the shoulders. Right arm "out" rolls toward -left.
+    line shoulder = line hip + line tu * ((line shY - line hipY) * line px);
+    line shR = line shoulder - line ta * (line shX * line px);
+    line shL = line shoulder + line ta * (line shX * line px);
+    line ar = basisRot(line ta, line tu, line tf, pose[6], pose[7], 0 - pose[8]);
+    rigSetMatrix(line ids[3], rigMatrix(line ar[1], line ar[2], line ar[3], line s, line shR), line interp);
+    line al = basisRot(line ta, line tu, line tf, pose[9], pose[10], pose[11]);
+    rigSetMatrix(line ids[4], rigMatrix(line al[1], line al[2], line al[3], line s, line shL), line interp);
+
+    // Legs from the hips (root frame, not the torso's).
+    line lr = basisRot(L, U, F, pose[12], 0, 0 - pose[13]);
+    rigSetMatrix(line ids[5], rigMatrix(line lr[1], line lr[2], line lr[3], line s, line hip - L * (line hipX * line px)), line interp);
+    line ll = basisRot(L, U, F, pose[14], 0, pose[15]);
+    rigSetMatrix(line ids[6], rigMatrix(line ll[1], line ll[2], line ll[3], line s, line hip + L * (line hipX * line px)), line interp);
+
+    // Held items in the fists: the item's +Y points out of the fist along
+    // the arm's forward, its +Z along the arm's down.
+    line handR = line shR - (line ar[2] as vec) * ((line armLen - 3) * line px);
+    line wb = basisRot(line ar[1], line ar[3], (line ar[2] as vec) * -1, pose[17], pose[18], pose[19]);
+    rigSetMatrix(line ids[7], rigMatrix(line wb[1], line wb[2], line wb[3], line s, line handR), line interp);
+    line handL = line shL - (line al[2] as vec) * ((line armLen - 3) * line px);
+    line ob = basisRot(line al[1], line al[3], (line al[2] as vec) * -1, pose[20], pose[21], pose[22]);
+    rigSetMatrix(line ids[8], rigMatrix(line ob[1], line ob[2], line ob[3], line s, line handL), line interp);
+    return line handR + vec(0, global rigRideY, 0);
+}

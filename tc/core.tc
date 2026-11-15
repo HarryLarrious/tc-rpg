@@ -1,0 +1,185 @@
+// Joining, leaving, the per-player loop and chat commands. A project has
+// one command event: add commands to `playerevent command` here.
+
+/** Per player UUID: 1 while the player is in the world (embodied). */
+declare global pIn: dict[num];
+/** Plot spawn point for new characters (set by the world generator). */
+declare saved spawnPoint: vec;
+/** 1: print debug values every second. */
+declare global dbgOn: num;
+/** Loop counter used to give each player loop an id. */
+declare global loopSeq: num;
+
+playerevent join {
+    line uuid = default.uuid;
+        default.setToAdventureMode();
+    default.clearInventory();
+    packSend();
+    bodyHideAllFrom();
+    pdOf(line uuid);
+    statsRecalc(line uuid);
+    global pHp[line uuid] = stat(line uuid, "maxHp");
+    global pMana[line uuid] = stat(line uuid, "maxMana");
+    global pSta[line uuid] = stat(line uuid, "maxSta");
+    wait(10);
+    if ((pdGet(line uuid, "made") as num) == 0) {
+        designerOpen();
+    } else {
+        enterWorld();
+    }
+}
+
+playerevent leave {
+    line uuid = default.uuid;
+    designerCleanup(line uuid);
+    global pIn.remove(line uuid);
+    bodyRemove(line uuid);
+}
+
+playerevent respawn {
+    if (hasBody(default.uuid) == 1) {
+        enterWorld();
+    }
+}
+
+/** Where a player enters the world: their saved place or the spawn. */
+function entryPoint(uuid: str): loc {
+    line sp = saved spawnPoint;
+    if (line sp.len() < 1) {
+        line sp = vec(500.5, 51, 500.5);
+    }
+    return loc(line sp.x, line sp.y, line sp.z);
+}
+
+/** Puts the player (default) into the world with a body and a camera. */
+function enterWorld {
+    line uuid = default.uuid;
+    statsRecalc(line uuid);
+    line at = entryPoint(line uuid);
+    default.rideEntity();
+    default.teleport(line at);
+    // The chunks there must load before anything can spawn in them.
+    wait(5);
+    bodySpawn(line at);
+    repeat (line i to 10) {
+        if (global pBody[line uuid] == 0 || global pBody[line uuid] == "") {
+            wait(5);
+            bodySpawn(line at);
+        }
+    }
+    hotbarRefresh(line uuid);
+    global pIn[line uuid] = 1;
+    global loopSeq += 1;
+    global pLoopId[line uuid] = global loopSeq;
+    start playerLoop;
+}
+
+/** Every tick while the player (default) is in the world. */
+process playerLoop {
+    line uuid = default.uuid;
+    line me = global pLoopId[line uuid];
+    while (global pIn[line uuid] == 1 && global pLoopId[line uuid] == line me) {
+        if (hasBody(line uuid) == 1) {
+            playerTick();
+        }
+        wait;
+    }
+}
+
+/** One tick of the player (default): body, animation, combat, HUD. */
+function playerTick {
+    line uuid = default.uuid;
+    if (global pLoopId[line uuid] == global loopSeq) {
+        global tick += 1;
+    }
+    line speed = bodyTick();
+    regenTick(line uuid);
+    combatTick(line uuid);
+
+    // Animation: walk phase from the distance moved.
+    line ph = global pPhase[line uuid] + line speed * 230;
+    global pPhase[line uuid] = line ph % 360;
+    line eye = default.eyeLocation;
+    line camYaw = line eye.getCoordinate(coord="Yaw");
+    line camPitch = line eye.getCoordinate(coord="Pitch");
+    line yaw = global pYaw[line uuid];
+    line pose = locoPose(line speed, global pGround[line uuid], line ph, global tick, wrapDeg(line camYaw - line yaw), 0 - line camPitch);
+    line pose = actionPose(line uuid, line pose);
+    rigRender(line uuid, line yaw, line pose);
+    if (global tick % 2 == 0) {
+        hudTick(line uuid);
+    }
+    if (global dbgOn == 1 && global tick % 20 == 0) {
+        line v = global pVel[line uuid];
+        default.sendMessage(s"RPGDBG yaw %var(yaw) cam %var(camYaw) vel %var(v) spd %var(speed)");
+    }
+}
+
+playerevent command {
+    line words = event.command.split(" ");
+    line cmd = (line words[1] as str).replace("@", "");
+    line uuid = default.uuid;
+    if (line cmd == "help") {
+        default.sendMessage(s"<gold>Commands: <yellow>@design @give TYPE [TIER RARITY] @loot [LVL] @xp N @gold N @cam DIST @tp X Y Z @where @world ... @respawn");
+    } else if (line cmd == "design") {
+        designerOpen();
+    } else if (line cmd == "give") {
+        if (line words.len() < 2) {
+            default.sendMessage(s"<gray>@give TYPE [TIER] [RARITY], or @give armor SLOT SET [TIER] [RARITY]");
+            return;
+        }
+        if (line words[2] == "armor") {
+            default.giveItems(makeArmor(line words[3] as str, line words[4] as str, argNum(line words, 5, 3), argNum(line words, 6, 3), game.ticksSinceStartup));
+        } else {
+            default.giveItems(makeWeapon(line words[2] as str, argNum(line words, 3, 3), argNum(line words, 4, 3), game.ticksSinceStartup));
+        }
+    } else if (line cmd == "loot") {
+        repeat (8) {
+            default.giveItems(rollLoot(argNum(line words, 2, 10), game.ticksSinceStartup + num.randomd(0, 100000)));
+        }
+    } else if (line cmd == "xp") {
+        giveXp(line uuid, argNum(line words, 2, 100));
+    } else if (line cmd == "gold") {
+        line g = giveGold(line uuid, argNum(line words, 2, 100));
+        default.sendMessage(s"<gold>Gold: %var(g)");
+    } else if (line cmd == "cam") {
+        global pCamDist[line uuid] = num.clamp(argNum(line words, 2, 4.5), 1.5, 9);
+    } else if (line cmd == "respawn") {
+        enterWorld();
+    } else if (line cmd == "where") {
+        line p = bodyFeet(line uuid);
+        default.sendMessage(s"<gray>Body at %var(p)");
+    } else if (line cmd == "tp") {
+        bodyTeleport(loc(argNum(line words, 2, 500), argNum(line words, 3, 60), argNum(line words, 4, 500)));
+    } else if (line cmd == "ride") {
+        global rigRideY = argNum(line words, 2, 1.95);
+    } else if (line cmd == "eye") {
+        global boomEye = argNum(line words, 2, 1.03);
+    } else if (line cmd == "dbgon") {
+        global dbgOn = 1 - global dbgOn;
+    } else if (line cmd == "dbg") {
+        line k = global rigParts.getKeys();
+        line b = global pBody;
+        line a = pdOf(line uuid);
+        default.sendMessage(s"RPGDBG rig %var(k) body %var(b)");
+        default.sendMessage(s"RPGDBG pd %var(a)");
+    } else if (line cmd == "world") {
+        worldCommand(line words);
+    } else if (line cmd == "npc") {
+        npcCommand(line words);
+    } else if (line cmd == "mob") {
+        mobCommand(line words);
+    } else if (line cmd == "learn") {
+        learnAllWords(line uuid);
+    } else {
+        default.sendMessage(s"<gray>Unknown command. <yellow>@help");
+    }
+}
+
+/** Number argument i of words, or fallback when missing. */
+function argNum(words: list, i: num, fallback: num): num {
+    if (words.len() >= i) {
+        return num.parse(words[i] as str);
+    }
+    return fallback;
+}

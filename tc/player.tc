@@ -1,0 +1,180 @@
+// Player data, stats and resources (PLAN.md, "Stats and progression").
+//
+// Saved per player UUID in `saved pd` (one record dict). Health, mana and
+// stamina live in globals while playing and are written back on leave.
+
+/** Per player UUID: the saved record (see pdNew). */
+declare saved pd: dict[dict];
+/** Per player: current health, mana, stamina. */
+declare global pHp: dict[num];
+declare global pMana: dict[num];
+declare global pSta: dict[num];
+/** Per player: tick until which health, mana and stamina do not regenerate. */
+declare global pRegenAt: dict[num];
+/** Per player: cached derived stats (see statsRecalc). */
+declare global pStat: dict[dict];
+/** Game tick counter (main loop). */
+declare global tick: num;
+
+/** A fresh record for a new player. */
+function pdNew(): dict {
+    return {
+        v: 1, made: 0, app: appDefault(), lvl: 1, xp: 0, pts: 0,
+        base: [5, 5, 5, 5, 5], gold: 50, words: ["ignis", "sagitta", "ferio"],
+        spells: {}, equip: {}, quests: {}, rank: 1, rep: 0, kills: 0, home: ""
+    };
+}
+
+/** The player's record (creates one when missing). */
+function pdOf(uuid: str): dict {
+    if (!saved pd.hasKeys(uuid)) {
+        saved pd[uuid] = pdNew();
+    }
+    return saved pd[uuid];
+}
+
+/** Sets field k of player uuid's record. */
+function pdSet(uuid: str, k: str, v: any) {
+    line r = pdOf(uuid);
+    line r[k] = v;
+    saved pd[uuid] = line r;
+}
+
+/** Field k of player uuid's record. */
+function pdGet(uuid: str, k: str): any {
+    return pdOf(uuid)[k];
+}
+
+/** The player's appearance. */
+function playerApp(uuid: str): dict {
+    line app = pdGet(uuid, "app") as dict;
+    line app["armor"] = equipArmorLook(uuid);
+    line app["main"] = equipHeldSpec(uuid, "main");
+    line app["off"] = equipHeldSpec(uuid, "off");
+    return line app;
+}
+
+/** The player's race. */
+function playerRace(uuid: str): str {
+    return (pdGet(uuid, "app") as dict)["race"] as str;
+}
+
+/** XP needed to go from level l to l + 1. */
+function xpNeed(l: num): num {
+    return num.floor(80 * l ** 1.45);
+}
+
+/** Recomputes the cached derived stats of player uuid from level, base
+ * stats, race and equipment. */
+function statsRecalc(uuid: str) {
+    line r = pdOf(uuid);
+    line race = (line r["app"] as dict)["race"] as str;
+    line base = line r["base"] as list[num];
+    line rs = raceStats(line race);
+    line gs = equipStats(uuid);
+    line names: list[str] = ["str", "dex", "int", "vit", "agi"];
+    line st = {};
+    repeat (line i to 5) {
+        line st[line names[line i]] = line base[line i] + line rs[line i] + line gs[line i];
+    }
+    line lvl = line r["lvl"] as num;
+    line st["maxHp"] = num.floor((80 + (line st["vit"] as num) * 12 + line lvl * 6) * raceMul(line race, "hp"));
+    line st["maxMana"] = 40 + (line st["int"] as num) * 6 + line lvl * 2;
+    line st["maxSta"] = 80 + (line st["agi"] as num) * 4;
+    line st["armor"] = equipArmorValue(uuid) * raceMul(line race, "armor");
+    line int = line st["int"] as num;
+    line st["eff"] = line int / (line int + 40);
+    line st["spell"] = (1 + line int / 50) * raceMul(line race, "spell");
+    line st["crit"] = 0.05 + (line st["dex"] as num) * 0.004 + raceMul(line race, "crit");
+    line st["speed"] = (0.19 + (line st["agi"] as num) * 0.0008) * raceMul(line race, "speed");
+    global pStat[uuid] = line st;
+}
+
+/** Derived stat k of player uuid. */
+function stat(uuid: str, k: str): num {
+    if (!global pStat.hasKeys(uuid)) {
+        statsRecalc(uuid);
+    }
+    return (global pStat[uuid] as dict)[k] as num;
+}
+
+/** Walking speed (blocks per tick) of player uuid. */
+function playerSpeed(uuid: str): num {
+    line s = stat(uuid, "speed");
+    if (equipEncumbered(uuid) == 1) {
+        line s = line s * 0.85;
+    }
+    return line s;
+}
+
+/** Takes `amount` stamina when there is enough; returns 1 if taken. */
+function staminaUse(uuid: str, amount: num): num {
+    line s = global pSta[uuid];
+    if (line s < amount) {
+        return 0;
+    }
+    global pSta[uuid] = line s - amount;
+    global pRegenAt[uuid] = num.max(global pRegenAt[uuid], global tick + 12);
+    return 1;
+}
+
+/** Takes `amount` mana when there is enough; returns 1 if taken. */
+function manaUse(uuid: str, amount: num): num {
+    line m = global pMana[uuid];
+    if (line m < amount) {
+        return 0;
+    }
+    global pMana[uuid] = line m - amount;
+    return 1;
+}
+
+/** Regenerates health, mana and stamina of player uuid (every tick). */
+function regenTick(uuid: str) {
+    line maxHp = stat(uuid, "maxHp");
+    line maxMana = stat(uuid, "maxMana");
+    line maxSta = stat(uuid, "maxSta");
+    if (global tick >= global pRegenAt[uuid]) {
+        global pSta[uuid] = num.min(maxSta, global pSta[uuid] + 1.2);
+    }
+    if (global tick % 10 == 0) {
+        global pMana[uuid] = num.min(maxMana, global pMana[uuid] + 0.6 + maxMana * 0.006);
+        if (global tick >= global pRegenAt[uuid] + 60) {
+            global pHp[uuid] = num.min(maxHp, global pHp[uuid] + 0.5 + stat(uuid, "vit") * 0.08);
+        }
+    }
+}
+
+/** Gives player uuid `amount` XP (race bonus applied), levelling up. */
+function giveXp(uuid: str, amount: num) {
+    line a = num.round(amount * raceMul(playerRace(uuid), "xp"));
+    line r = pdOf(uuid);
+    line xp = (line r["xp"] as num) + line a;
+    line lvl = line r["lvl"] as num;
+    line up = 0;
+    while (line xp >= xpNeed(line lvl) && line lvl < 50) {
+        line xp -= xpNeed(line lvl);
+        line lvl += 1;
+        line up += 1;
+    }
+    line r["xp"] = line xp;
+    line r["lvl"] = line lvl;
+    line r["pts"] = (line r["pts"] as num) + line up * 3;
+    saved pd[uuid] = line r;
+    select playersByName(uuid);
+    selected.sendActionBar(s"<#9BE27A>+%var(a) XP");
+    if (line up > 0) {
+        statsRecalc(uuid);
+        global pHp[uuid] = stat(uuid, "maxHp");
+        global pMana[uuid] = stat(uuid, "maxMana");
+        selected.sendTitle(s"<gold><b>Level %var(lvl)</b>", s"<yellow>+%math(%var(up)*3) stat points <gray>(Journal)", 5, 50, 15);
+        selected.playSound(snd("Player Level Up", 1, 0.8));
+    }
+    select reset;
+}
+
+/** Gives player uuid `amount` gold (negative takes); returns the new total. */
+function giveGold(uuid: str, amount: num): num {
+    line g = (pdGet(uuid, "gold") as num) + amount;
+    pdSet(uuid, "gold", line g);
+    return line g;
+}

@@ -1,0 +1,1 @@
+{"textures":{"t0":"rpg:item/fx_rune","particle":"rpg:item/fx_rune"},"elements":[{"from":[-8.0,7.9,-8.0],"to":[24.0,8.1,24.0],"faces":{"up":{"uv":[0,0,16,16],"texture":"#t0","tintindex":0},"down":{"uv":[0,16,16,0],"texture":"#t0","tintindex":0}},"light_emission":15}]}

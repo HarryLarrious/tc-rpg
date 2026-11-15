@@ -1,0 +1,49 @@
+// Locomotion poses: idle breathing, walk and run cycles, jumping and
+// falling, and the head following the camera. Actions (attacks, casts,
+// dodges) overlay these in combat.tc.
+
+/** Linear blend of a and b by k. */
+function mix(a: num, b: num, k: num): num {
+    return a + (b - a) * k;
+}
+
+/** Locomotion pose of a character. speed in blocks per tick, grounded
+ * 0/1, phase the walk phase (degrees), t a tick counter, lookYaw/lookPitch
+ * the head's turn relative to the body (degrees). */
+function locoPose(speed: num, grounded: num, phase: num, t: num, lookYaw: num, lookPitch: num): list[num] {
+    line p = poseZero();
+    line run = num.clamp((speed - 0.12) / 0.16, 0, 1);
+    line amp = num.clamp(speed / 0.2, 0, 1) * mix(38, 62, line run);
+    line sn = num.sin(phase);
+    line cs = num.cos(phase);
+    if (grounded == 1) {
+        // Legs swing opposite, arms opposite the legs.
+        line p[12] = line sn * line amp;
+        line p[14] = 0 - line sn * line amp;
+        line p[6] = 0 - line sn * line amp * 0.75;
+        line p[9] = line sn * line amp * 0.75;
+        line p[1] = mix(2, 12, line run) * num.clamp(speed / 0.2, 0, 1);
+        line p[16] = num.abs(line cs) * line amp * 0.018 - line amp * 0.008;
+        line p[2] = line sn * line amp * 0.12;
+        // Idle breathing.
+        line breath = num.sin(t * 4.5);
+        line p[8] = 3 + line breath * 1.5;
+        line p[11] = 3 + line breath * 1.5;
+        line p[16] = line p[16] + line breath * 0.15;
+        if (line run > 0.3) {
+            line p[6] = line p[6] - 20 * line run;
+            line p[9] = line p[9] - 20 * line run;
+        }
+    } else {
+        line p[12] = 28;
+        line p[14] = -12;
+        line p[6] = -25;
+        line p[9] = 10;
+        line p[8] = 22;
+        line p[11] = 22;
+        line p[1] = 6;
+    }
+    line p[5] = num.clamp(lookYaw, -65, 65);
+    line p[4] = num.clamp(lookPitch, -40, 50) - line p[1];
+    return line p;
+}

@@ -1,0 +1,415 @@
+// Items: procedural weapons and armor, and the player's equipment
+// (PLAN.md, "Items").
+//
+// An item is a paper item with a custom model and custom tags:
+//   k   kind: weapon, armor, scroll, mat, potion
+//   t   weapon type or armor slot (head, torso, arm, leg)
+//   set armor set (leather, chain, ...)
+//   m   material tier 1-9, r rarity 1-6, v model variant
+//   d   damage (weapons) or armor value
+//   s1..s5 bonus STR DEX INT VIT AGI
+//   sl  slots; dur/dmax durability
+
+/** Material tiers: [name, damage mul, head color, handle color, accent]. */
+function matData(t: num): list {
+    line m = [
+        ["Wooden", 0.8, 0x9A7448, 0x5A3D22, 0x6B4E2E],
+        ["Bronze", 1, 0xC48A4A, 0x5A3A22, 0xD8A858],
+        ["Iron", 1.25, 0xB4B8BC, 0x4A3828, 0x8A8E92],
+        ["Steel", 1.5, 0xD6DCE4, 0x2E2A28, 0xA0A8B0],
+        ["Silver", 1.75, 0xEEF2FA, 0x3A2E4A, 0x8AB0F0],
+        ["Mithril", 2.1, 0xA8E4F4, 0x2A3A5A, 0x50E0FF],
+        ["Adamant", 2.5, 0x5E9C70, 0x262626, 0x40FF90],
+        ["Dragonbone", 3, 0xEADCC0, 0x6A1E1E, 0xFF5030],
+        ["Runic", 3.6, 0x5C4A90, 0x1A1A2A, 0xC080FF]
+    ];
+    return line m[num.clamp(t, 1, 9)] as list;
+}
+
+/** Rarity r: [name, color tag, damage mul]. */
+function rarData(r: num): list {
+    line d = [
+        ["Common", "#C8C8C8", 1],
+        ["Uncommon", "#5CFF6A", 1.1],
+        ["Rare", "#4C9BFF", 1.22],
+        ["Epic", "#B05CFF", 1.36],
+        ["Legendary", "#FFAA00", 1.5],
+        ["Mythic", "#FF4A4A", 1.7]
+    ];
+    return line d[num.clamp(r, 1, 6)] as list;
+}
+
+/** Weapon types: [name, damage, speed, reach, STR, DEX, INT scaling,
+ * hands, animation set, bonus stat (1-5, 0 none), slot rule, variants].
+ * Slot rules: wand (= rarity magic slots), staff (ceil(r/2) magic),
+ * dagger (ceil(r/2) ability), arms (1 from Rare, 2 from Legendary). */
+function wtData(t: str): list {
+    line w = {
+        sword: ["Sword", 8, 1, 3, 0.5, 0.5, 0, 1, "blade", 0, "arms", 3],
+        longsword: ["Longsword", 11, 0.85, 3.3, 0.6, 0.4, 0, 1, "blade", 1, "arms", 3],
+        greatsword: ["Greatsword", 17, 0.6, 3.8, 1, 0, 0, 2, "heavy", 1, "arms", 3],
+        dagger: ["Dagger", 5, 1.6, 2.4, 0, 1, 0, 1, "dagger", 2, "dagger", 3],
+        spear: ["Spear", 10, 0.9, 4.4, 0.3, 0.7, 0, 2, "spear", 2, "arms", 3],
+        halberd: ["Halberd", 15, 0.65, 4.6, 0.7, 0.3, 0, 2, "polearm", 1, "arms", 3],
+        axe: ["Axe", 10, 0.9, 3, 0.8, 0.2, 0, 1, "blade", 1, "arms", 3],
+        greataxe: ["Greataxe", 18, 0.55, 3.6, 1, 0, 0, 2, "heavy", 1, "arms", 3],
+        mace: ["Mace", 10, 0.85, 2.9, 1, 0, 0, 1, "blunt", 4, "arms", 3],
+        warhammer: ["Warhammer", 19, 0.5, 3.4, 1, 0, 0, 2, "heavy", 4, "arms", 3],
+        scythe: ["Scythe", 14, 0.7, 4.1, 0.5, 0.5, 0, 2, "scythe", 5, "arms", 2],
+        gauntlets: ["Gauntlets", 7, 1.5, 2.4, 0.6, 0.4, 0, 2, "fist", 1, "dagger", 3],
+        staff: ["Staff", 6, 0.8, 3.6, 0.2, 0, 0.6, 2, "staff", 3, "staff", 3],
+        wand: ["Wand", 3, 1, 2.6, 0, 0, 0.4, 1, "wand", 3, "wand", 3],
+        bow: ["Bow", 9, 1, 30, 0, 1, 0, 2, "bow", 2, "arms", 2],
+        crossbow: ["Crossbow", 14, 0.6, 34, 0.5, 0.5, 0, 2, "crossbow", 2, "arms", 1],
+        shield: ["Shield", 3, 1, 2.4, 1, 0, 0, 1, "shield", 4, "none", 3]
+    };
+    if (line w.hasKeys(t)) {
+        return line w[t] as list;
+    }
+    return line w["sword"] as list;
+}
+
+/** All weapon type ids. */
+function weaponTypes(): list[str] {
+    return ["sword", "longsword", "greatsword", "dagger", "spear", "halberd", "axe", "greataxe", "mace", "warhammer", "scythe", "gauntlets", "staff", "wand", "bow", "crossbow", "shield"];
+}
+
+/** Armor sets: [name, armor per tier, speed penalty (0/1), metal (0/1)]. */
+function armorSetData(s: str): list {
+    line d = {
+        leather: ["Leather", 2, 0, 0], chain: ["Chain", 3, 0, 1], scale: ["Scale", 4, 1, 1],
+        plate: ["Plate", 5, 1, 1], robe: ["Mage", 1, 0, 0], ranger: ["Ranger", 2, 0, 0],
+        noble: ["Noble", 1.5, 0, 0], bone: ["Bone", 3, 0, 0]
+    };
+    if (line d.hasKeys(s)) {
+        return line d[s] as list;
+    }
+    return line d["leather"] as list;
+}
+
+/** Armor piece names per slot. */
+function armorPieceName(slot: str, set: str): str {
+    if (slot == "head") {
+        if (set == "robe") { return "Hat"; }
+        if (set == "ranger") { return "Hood"; }
+        if (set == "noble") { return "Circlet"; }
+        return "Helm";
+    }
+    if (slot == "torso") {
+        if (set == "robe") { return "Robe"; }
+        if (set == "noble") { return "Doublet"; }
+        return "Cuirass";
+    }
+    if (slot == "arm") {
+        return "Bracers";
+    }
+    return "Greaves";
+}
+
+/** Cloth colors for non-metal armor of tier t: [main, trim]. */
+function clothTier(t: num): list[num] {
+    line c = [[0x7A5A3A, 0x4A3422], [0x6A4A2A, 0xB08850], [0x3E5A2E, 0x8A7040], [0x2E4A7A, 0xC8A050], [0x7A2A2A, 0xE0C060], [0x4A2A6A, 0xE0D0FF], [0x1E3A3A, 0x60E0C0], [0x5A1A1A, 0xFF8040], [0x2A1A4A, 0xC080FF]];
+    return line c[num.clamp(t, 1, 9)] as list[num];
+}
+
+/** Integer hash of a number (deterministic loot). */
+function hash(n: num): num {
+    line x = (n * 2654435761 + 1013904223) % 4294967296;
+    line x = (line x ^ (line x >> 13)) % 4294967296;
+    line x = (line x * 1274126177) % 4294967296;
+    return num.abs((line x ^ (line x >> 16)) % 2147483647);
+}
+
+/** Lore line for stat bonus list b. */
+function statLore(b: list[num]): list[str] {
+    line names = ["STR", "DEX", "INT", "VIT", "AGI"];
+    line out: list[str] = [];
+    repeat (line i to 5) {
+        if (b[line i] > 0) {
+            line n = line names[line i];
+            line v = b[line i];
+            line out.append("<#7FD4FF>+%var(v) %var(n)");
+        }
+    }
+    return line out;
+}
+
+/** Makes a weapon of type t, material tier m, rarity r, seeded by `seed`. */
+function makeWeapon(t: str, m: num, r: num, seed: num): item {
+    line w = wtData(t);
+    line md = matData(m);
+    line rd = rarData(r);
+    line h = hash(seed);
+    line variant = 1 + line h % (line w[12] as num);
+    line dmg = num.round((line w[2] as num) * (line md[2] as num) * (line rd[3] as num) * (0.92 + (line h % 17) / 100) * 10) / 10;
+    // Stat bonuses: the type's stat by quality, plus random affixes.
+    line b: list[num] = [0, 0, 0, 0, 0];
+    line bs = line w[10] as num;
+    if (line bs > 0) {
+        line b[line bs] = num.floor(m * 0.8 + r * 1.2);
+    }
+    repeat (line i to r - 1) {
+        line k = 1 + hash(seed + line i * 31) % 5;
+        line b[line k] = (line b[line k] as num) + 1 + num.floor(m / 3);
+    }
+    // Slots.
+    line rule = line w[11] as str;
+    line slots = 0;
+    if (line rule == "wand") {
+        line slots = r;
+    } else if (line rule == "staff" || line rule == "dagger") {
+        line slots = num.ceil(r / 2);
+    } else if (line rule == "arms") {
+        line slots = num.min(2, num.floor((r - 1) / 2));
+    }
+    line slotKind = "ability";
+    if (line rule == "wand" || line rule == "staff") {
+        line slotKind = "magic";
+    }
+    line dmax = 80 + m * 40 + r * 20;
+    line rname = line rd[1] as str;
+    line rcol = line rd[2] as str;
+    line mname = line md[1] as str;
+    line wname = line w[1] as str;
+    line spd = line w[3];
+    line name = "%var(rcol)%var(mname) %var(wname)";
+    if (r >= 5) {
+        line epithets = ["of Embers", "of the Gale", "of Dusk", "of the Lion", "of Echoes", "of Ruin", "of the Moon", "of Kings"];
+        line ep = line epithets[1 + hash(seed + 7) % 8];
+        line name = "%var(name) %var(ep)";
+    }
+    line lore: list[txt] = [s"<gray>%var(rname) %var(wname) <dark_gray>| Tier %var(m)"];
+    if (t == "shield") {
+        line lore.append(s"<white>Block <yellow>%math(%var(dmg)*10)%");
+    } else {
+        line lore.append(s"<white>Damage <yellow>%var(dmg)  <white>Speed <yellow>%var(spd)");
+    }
+    for (line l of statLore(line b)) {
+        line lore.append(s"%var(l)");
+    }
+    if (line slots > 0) {
+        line lore.append(s"<#C080FF>%var(slots) %var(slotKind) slot(s)");
+    }
+    if ((line w[8] as num) == 2) {
+        line lore.append(s"<dark_gray>Two-handed");
+    }
+    line lore.append(s"<dark_gray>Durability %var(dmax)/%var(dmax)");
+    line reqLvl = num.max(1, m * 5 - 5 + r);
+    line lore.append(s"<dark_gray>Requires level %var(reqLvl)");
+    line it = item("paper").setModel("rpg:weapon/%var(t)").setModelDataStrings(["%var(variant)"]).setModelDataNumbers([line md[3] as num, line md[4] as num, line md[5] as num], type="Colors");
+    line it = line it.setName(s"<!i>%var(name)").setLore(line lore);
+    line it = line it.setTag("k", "weapon").setTag("t", t).setTag("m", m).setTag("r", r).setTag("v", line variant).setTag("d", line dmg);
+    line it = line it.setTag("s1", line b[1]).setTag("s2", line b[2]).setTag("s3", line b[3]).setTag("s4", line b[4]).setTag("s5", line b[5]);
+    line it = line it.setTag("sl", line slots).setTag("slk", line slotKind).setTag("dur", line dmax).setTag("dmax", line dmax).setTag("lvl", line reqLvl);
+    return line it;
+}
+
+/** Makes an armor piece for slot (head, torso, arm, leg) of set `set`. */
+function makeArmor(slot: str, set: str, m: num, r: num, seed: num): item {
+    line sd = armorSetData(set);
+    line rd = rarData(r);
+    line md = matData(m);
+    line colors = [line md[3], line md[5]];
+    if ((line sd[4] as num) == 0) {
+        line colors = clothTier(m);
+    }
+    line slotMul = {head: 0.8, torso: 1.4, arm: 0.6, leg: 1};
+    line av = num.round((line sd[2] as num) * (1 + m * 0.6) * (slotMul[slot] as num) * (line rd[3] as num) * 10) / 10;
+    line b: list[num] = [0, 0, 0, 0, 0];
+    if (set == "robe") {
+        line b[3] = num.floor(m * 0.7 + r);
+    } else if (set == "ranger") {
+        line b[2] = num.floor(m * 0.5 + r * 0.7);
+    } else if (set == "plate" || set == "scale") {
+        line b[4] = num.floor(m * 0.5 + r * 0.7);
+    } else if (set == "bone") {
+        line b[1] = num.floor(m * 0.5 + r * 0.7);
+    }
+    repeat (line i to r - 1) {
+        line k = 1 + hash(seed + line i * 17) % 5;
+        line b[line k] = (line b[line k] as num) + 1 + num.floor(m / 3);
+    }
+    line rcol = line rd[2] as str;
+    line rname = line rd[1] as str;
+    line piece = armorPieceName(slot, set);
+    line setName = line sd[1] as str;
+    line mname = line md[1] as str;
+    if ((line sd[4] as num) == 0) {
+        line mname = line sd[1] as str;
+    }
+    line lore: list[txt] = [s"<gray>%var(rname) %var(setName) armor <dark_gray>| Tier %var(m)", s"<white>Armor <yellow>%var(av)"];
+    for (line l of statLore(line b)) {
+        line lore.append(s"%var(l)");
+    }
+    if ((line sd[3] as num) == 1) {
+        line lore.append(s"<dark_gray>Heavy: slows you a little");
+    }
+    line reqLvl = num.max(1, m * 5 - 5 + r);
+    line lore.append(s"<dark_gray>Requires level %var(reqLvl)");
+    line it = item("paper").setModel("rpg:armor/%var(slot)").setModelDataStrings([set]);
+    line ca = line colors[1] as num;
+    line cb = line colors[2] as num;
+    line it = line it.setModelDataNumbers([0xFFFFFF, 0xFFFFFF, 0xFFFFFF, 0xFFFFFF, line ca, line cb, 0xFFFFFF, line ca], type="Colors");
+    line it = line it.setName(s"<!i>%var(rcol)%var(mname) %var(piece)").setLore(line lore);
+    line it = line it.setTag("k", "armor").setTag("t", slot).setTag("set", set).setTag("m", m).setTag("r", r).setTag("d", line av);
+    line it = line it.setTag("s1", line b[1]).setTag("s2", line b[2]).setTag("s3", line b[3]).setTag("s4", line b[4]).setTag("s5", line b[5]);
+    line it = line it.setTag("c1", line ca).setTag("c2", line cb).setTag("lvl", line reqLvl);
+    return line it;
+}
+
+/** A random drop for a monster of level lvl, seeded. */
+function rollLoot(lvl: num, seed: num): item {
+    line h = hash(seed);
+    line m = num.clamp(num.floor(lvl / 5) + 1 + (line h % 3) - 1, 1, 9);
+    line roll = line h % 1000;
+    line r = 1;
+    if (line roll < 4) { line r = 6; } else if (line roll < 20) { line r = 5; } else if (line roll < 80) { line r = 4; } else if (line roll < 220) { line r = 3; } else if (line roll < 480) { line r = 2; }
+    if ((line h / 7) % 2 == 0) {
+        line types = weaponTypes();
+        return makeWeapon(line types[1 + hash(seed + 3) % line types.len()], line m, line r, seed);
+    }
+    line slots: list[str] = ["head", "torso", "arm", "leg"];
+    line sets: list[str] = ["leather", "chain", "scale", "plate", "robe", "ranger", "noble", "bone"];
+    return makeArmor(line slots[1 + hash(seed + 5) % 4], line sets[1 + hash(seed + 9) % 8], line m, line r, seed);
+}
+
+/** Custom tag k of item it ("" or 0 when missing). */
+function tagOf(it: item, k: str): any {
+    return it.getTag(k);
+}
+
+// ---------------------------------------------------------------- equipment
+
+/** Equipment slot names. */
+function equipSlots(): list[str] {
+    return ["main", "off", "head", "torso", "arm", "leg"];
+}
+
+/** The item in equipment slot `slot` of player uuid, or air. */
+function equipOf(uuid: str, slot: str): item {
+    line e = pdGet(uuid, "equip") as dict;
+    if (line e.hasKeys(slot)) {
+        return line e[slot] as item;
+    }
+    return item("air");
+}
+
+/** 1 when equipment slot `slot` holds an item. */
+function equipHas(uuid: str, slot: str): num {
+    line e = pdGet(uuid, "equip") as dict;
+    if (line e.hasKeys(slot)) {
+        return 1;
+    }
+    return 0;
+}
+
+/** Puts it (or nothing, when air) into equipment slot `slot`. */
+function equipSet(uuid: str, slot: str, it: item) {
+    line e = pdGet(uuid, "equip") as dict;
+    if (it.getTag("k") == 0 || it.getTag("k") == "") {
+        line e.remove(slot);
+    } else {
+        line e[slot] = it;
+    }
+    pdSet(uuid, "equip", line e);
+    statsRecalc(uuid);
+    if (hasBody(uuid) == 1) {
+        rigRefresh(uuid, playerApp(uuid));
+    }
+}
+
+/** The armor look of player uuid for the rig: {part: [set, main, trim]}. */
+function equipArmorLook(uuid: str): dict {
+    line out = {};
+    for (line p of ["head", "torso", "arm", "leg"]) {
+        line out[line p] = ["", 0, 0];
+        if (equipHas(uuid, line p) == 1) {
+            line it = equipOf(uuid, line p);
+            line out[line p] = [it.getTag("set"), it.getTag("c1"), it.getTag("c2")];
+        }
+    }
+    return line out;
+}
+
+/** Held item spec ("model|c1|c2|c3|variant") for slot main/off. */
+function equipHeldSpec(uuid: str, slot: str): str {
+    if (equipHas(uuid, slot) == 0) {
+        return "";
+    }
+    line it = equipOf(uuid, slot);
+    line t = it.getTag("t") as str;
+    line md = matData(it.getTag("m") as num);
+    line v = it.getTag("v");
+    line c1 = line md[3];
+    line c2 = line md[4];
+    line c3 = line md[5];
+    return "rpg:weapon/%var(t)|%var(c1)|%var(c2)|%var(c3)|%var(v)";
+}
+
+/** Sum of stat bonuses of everything player uuid has equipped. */
+function equipStats(uuid: str): list[num] {
+    line out: list[num] = [0, 0, 0, 0, 0];
+    for (line slot of equipSlots()) {
+        if (equipHas(uuid, line slot) == 1) {
+            line it = equipOf(uuid, line slot);
+            repeat (line i to 5) {
+                line out[line i] = (line out[line i] as num) + (it.getTag("s%var(i)") as num);
+            }
+        }
+    }
+    return line out;
+}
+
+/** Total armor value of player uuid. */
+function equipArmorValue(uuid: str): num {
+    line a = 0;
+    for (line slot of ["head", "torso", "arm", "leg", "off"]) {
+        if (equipHas(uuid, line slot) == 1) {
+            line it = equipOf(uuid, line slot);
+            if (it.getTag("k") == "armor") {
+                line a += it.getTag("d") as num;
+            }
+        }
+    }
+    return line a;
+}
+
+/** 1 when player uuid wears heavy armor on torso or legs. */
+function equipEncumbered(uuid: str): num {
+    for (line slot of ["torso", "leg"]) {
+        if (equipHas(uuid, line slot) == 1) {
+            line s = equipOf(uuid, line slot).getTag("set");
+            if (line s == "plate" || line s == "scale") {
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+/** Weapon type in the main hand ("fist" when empty). */
+function mainType(uuid: str): str {
+    if (equipHas(uuid, "main") == 0) {
+        return "fist";
+    }
+    return equipOf(uuid, "main").getTag("t") as str;
+}
+
+/** Spell (magic) and ability slot counts of player uuid: [magic, ability]. */
+function equipSlotCounts(uuid: str): list[num] {
+    line mg = 0;
+    line ab = 0;
+    for (line slot of ["main", "off"]) {
+        if (equipHas(uuid, line slot) == 1) {
+            line it = equipOf(uuid, line slot);
+            if (it.getTag("slk") == "magic") {
+                line mg += it.getTag("sl") as num;
+            } else {
+                line ab += it.getTag("sl") as num;
+            }
+        }
+    }
+    line mg = num.min(line mg, 7);
+    line ab = num.min(line ab, 7 - line mg);
+    return [line mg, line ab];
+}

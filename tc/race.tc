@@ -1,0 +1,153 @@
+// Races: looks and bonuses (PLAN.md, "Races").
+
+/** Race ids in menu order. */
+function raceIds(): list[str] {
+    return ["human", "elf", "dwarf", "demon", "felkin", "lupin", "ursan", "leporin"];
+}
+
+/** Display name of race r. */
+function raceName(r: str): str {
+    line names = {human: "Human", elf: "Elf", dwarf: "Dwarf", demon: "Demon", felkin: "Felkin", lupin: "Lupin", ursan: "Ursan", leporin: "Leporin"};
+    if (line names.hasKeys(r)) {
+        return line names[r] as str;
+    }
+    return "Human";
+}
+
+/** One-line description of race r's bonuses. */
+function raceBlurb(r: str): str {
+    line b = {
+        human: "Adaptable: +10% XP, +1 to every stat.",
+        elf: "Keen-eyed: +15% ranged damage, +3 DEX.",
+        dwarf: "Stout: +3 STR, +10% armor, cheaper smithing.",
+        demon: "Infernal: +3 INT, +15% spell power, resists fire.",
+        felkin: "Cat-folk: +15% speed, +5% critical chance.",
+        lupin: "Wolf-folk: +10% melee damage, melee lifesteal.",
+        ursan: "Bear-folk: +25% health, +2 VIT.",
+        leporin: "Rabbit-folk: +40% jump height, +3 AGI."
+    };
+    if (line b.hasKeys(r)) {
+        return line b[r] as str;
+    }
+    return "";
+}
+
+/** Base height scale of race r. */
+function raceScale(r: str): num {
+    line s = {human: 1, elf: 1.06, dwarf: 0.82, demon: 1.05, felkin: 0.95, lupin: 1.02, ursan: 1.1, leporin: 0.92};
+    if (line s.hasKeys(r)) {
+        return line s[r] as num;
+    }
+    return 1;
+}
+
+/** Ears or horns of race r. */
+function raceEars(r: str): str {
+    line e = {human: "human", elf: "elf", dwarf: "human", demon: "demon", felkin: "cat", lupin: "wolf", ursan: "bear", leporin: "rabbit"};
+    if (line e.hasKeys(r)) {
+        return line e[r] as str;
+    }
+    return "human";
+}
+
+/** Tail of race r ("" for none). */
+function raceTail(r: str): str {
+    line t = {demon: "demon", felkin: "cat", lupin: "wolf", ursan: "bear", leporin: "rabbit"};
+    if (line t.hasKeys(r)) {
+        return line t[r] as str;
+    }
+    return "";
+}
+
+/** Body build for race r and sex ("m"/"f"). */
+function raceBuild(r: str, sex: str): str {
+    if (r == "dwarf") {
+        return "d%var(sex)";
+    }
+    return sex;
+}
+
+/** Stat bonuses of race r: [STR, DEX, INT, VIT, AGI]. */
+function raceStats(r: str): list[num] {
+    line s = {human: [1, 1, 1, 1, 1], elf: [0, 3, 0, 0, 0], dwarf: [3, 0, 0, 0, 0], demon: [0, 0, 3, 0, 0], felkin: [0, 1, 0, 0, 1], lupin: [1, 0, 0, 0, 0], ursan: [0, 0, 0, 2, 0], leporin: [0, 0, 0, 0, 3]};
+    if (line s.hasKeys(r)) {
+        return line s[r] as list[num];
+    }
+    return [0, 0, 0, 0, 0];
+}
+
+/** Multiplier of race r for bonus kind k: xp, ranged, armor, spell, speed,
+ * crit (added), melee, lifesteal (added), hp, jump, smith. */
+function raceMul(r: str, k: str): num {
+    if (r == "human" && k == "xp") { return 1.1; }
+    if (r == "elf" && k == "ranged") { return 1.15; }
+    if (r == "dwarf" && k == "armor") { return 1.1; }
+    if (r == "dwarf" && k == "smith") { return 0.8; }
+    if (r == "demon" && k == "spell") { return 1.15; }
+    if (r == "felkin" && k == "speed") { return 1.15; }
+    if (r == "felkin" && k == "crit") { return 0.05; }
+    if (r == "lupin" && k == "melee") { return 1.1; }
+    if (r == "lupin" && k == "lifesteal") { return 0.02; }
+    if (r == "ursan" && k == "hp") { return 1.25; }
+    if (r == "leporin" && k == "jump") { return 1.4; }
+    if (k == "crit" || k == "lifesteal") { return 0; }
+    return 1;
+}
+
+/** Skin color presets for race r (the designer cycles them). */
+function raceSkins(r: str): list[num] {
+    if (r == "demon") { return [0xB0302A, 0x8A2440, 0x6A2C6E, 0x4B4E8A, 0x2E2E36, 0xC75A3A]; }
+    if (r == "elf") { return [0xF2D3BC, 0xE6BFA0, 0xC99A78, 0xA7C4A0, 0x8F7C9E, 0x6B4A3A]; }
+    if (r == "felkin" || r == "lupin" || r == "ursan" || r == "leporin") {
+        return [0xE8C9A0, 0xD8A878, 0xB07D50, 0x8C6A4E, 0x6A4A36, 0xF1E6D8];
+    }
+    return [0xF6D7C3, 0xE8BA98, 0xD09A72, 0xA8754E, 0x7C5236, 0x4E3324];
+}
+
+/** Hair / fur color presets. */
+function hairColors(): list[num] {
+    return [0x16120F, 0x3B2A1E, 0x6B4428, 0x9A6A3A, 0xD8B66A, 0xEAE0C8, 0xB33A1E, 0x8C8C8C, 0x2F5FAA, 0x5A9E4A, 0x7A3FA0, 0xE070A0];
+}
+
+/** Eye color presets. */
+function eyeColors(): list[num] {
+    return [0x3C6E9E, 0x4E8A3E, 0x6B4A2A, 0x7A8A9A, 0xC8A030, 0xC02020, 0x8A40C0, 0x30C0C0];
+}
+
+/** Clothing color presets. */
+function clothColors(): list[num] {
+    return [0x8A6A45, 0x5E7A3A, 0x3A5A8A, 0x8A2E2E, 0x6A4A8A, 0xC8B890, 0x404448, 0x2E5E5A, 0xB07A2A, 0xE0E0D8];
+}
+
+/** A random appearance for race r (NPCs). Uses hash h for choices. */
+function appRandom(r: str, h: num): dict {
+    line app = appDefault();
+    line sex = "m";
+    if (h % 2 == 1) {
+        line sex = "f";
+    }
+    line skins = raceSkins(r);
+    line hc = hairColors();
+    line cc = clothColors();
+    line hairs = rigOptions("hair");
+    app["race"] = r;
+    app["build"] = raceBuild(r, line sex);
+    app["scale"] = raceScale(r) * (0.95 + (h % 11) / 100);
+    app["skin"] = line skins[1 + num.floor(h / 3) % line skins.len()];
+    app["hair"] = line hc[1 + num.floor(h / 7) % 8];
+    app["eye"] = eyeColors()[1 + num.floor(h / 5) % 5];
+    app["cloth"] = line cc[1 + num.floor(h / 11) % line cc.len()];
+    app["pants"] = line cc[1 + num.floor(h / 13) % line cc.len()];
+    app["hairStyle"] = line hairs[1 + num.floor(h / 17) % line hairs.len()];
+    app["ears"] = raceEars(r);
+    app["tail"] = raceTail(r);
+    app["beard"] = "";
+    if (line sex == "m" && num.floor(h / 19) % 3 != 0) {
+        line beards = rigOptions("beard");
+        app["beard"] = line beards[1 + num.floor(h / 23) % line beards.len()];
+    }
+    if (r == "dwarf" && line sex == "m") {
+        app["beard"] = ["long", "braided", "full"][1 + num.floor(h / 29) % 3];
+    }
+    return app;
+}

@@ -1,0 +1,250 @@
+// The player's body and camera (PLAN.md, "Camera and the player's body").
+//
+// The body is an invisible husk moved by velocity, so vanilla physics does
+// gravity, collision and steps. The player rides the "boom", an interaction
+// entity moved every tick behind the body, so the camera looks at the body
+// from behind, and the rig (rig.tc) rides the body.
+
+/** Per player UUID: body husk UUID, boom UUID. */
+declare global pBody: dict[str];
+declare global pBoom: dict[str];
+/** Per player: body yaw (degrees), stored horizontal velocity, walk phase. */
+declare global pYaw: dict[num];
+declare global pVel: dict[vec];
+declare global pPhase: dict[num];
+/** Per player: held keys (jump, sprint, sneak) as 0/1, a queued jump. */
+declare global pSprint: dict[num];
+declare global pJumpQ: dict[num];
+/** Per player: camera distance (blocks) and the last body position. */
+declare global pCamDist: dict[num];
+declare global pFeet: dict[vec];
+/** Per player: 1 while the body is grounded. */
+declare global pGround: dict[num];
+/** Per player: 1 while the body should face where the camera looks. */
+declare global pAim: dict[num];
+/** Per player: the loop id that owns the player (newer loops win). */
+declare global pLoopId: dict[num];
+/** Rider eye height above the boom entity. */
+declare global boomEye: num;
+
+/** Horizontal unit vector a body with Minecraft yaw `yaw` faces. */
+function yawFwd(yaw: num): vec {
+    return vec(0 - num.sin(yaw), 0, num.cos(yaw));
+}
+
+/** Minecraft yaw of horizontal direction d. */
+function yawOf(d: vec): num {
+    return num.atan2(0 - d.x, d.z);
+}
+
+/** Wraps an angle to -180..180. */
+function wrapDeg(a: num): num {
+    line r = a % 360;
+    if (line r > 180) {
+        line r -= 360;
+    }
+    if (line r < -180) {
+        line r += 360;
+    }
+    return line r;
+}
+
+/** Spawns the body, boom and rig of the player (default) at `at`. */
+function bodySpawn(at: loc) {
+    line uuid = default.uuid;
+    bodyRemove(line uuid);
+    if (global boomEye == 0) {
+        global boomEye = 1.03;
+    }
+    game.spawnMob(item("husk_spawn_egg"), at);
+    lastEntity.setAI(ai="Insentient");
+    lastEntity.setInvulnerable(invulnerable="Enable");
+    lastEntity.setInvisible(invisible="Enable");
+        lastEntity.setMovementAttribute(1.05, attr="Step height");
+    lastEntity.setCombatAttribute(0, attr="Attack damage");
+    lastEntity.setMiscellaneousAttribute(0, attr="Name tag distance");
+    line body = lastEntity.uuid;
+    game.spawnInteractionEntity(loc(at.x, at.y + 2, at.z), 0.01, 0.01);
+    line boom = lastEntity.uuid;
+    global pBody[line uuid] = line body;
+    global pBoom[line uuid] = line boom;
+    global pYaw[line uuid] = at.getCoordinate(coord="Yaw");
+    global pVel[line uuid] = vec(0, 0, 0);
+    global pPhase[line uuid] = 0;
+    global pSprint[line uuid] = 0;
+    global pJumpQ[line uuid] = 0;
+    global pAim[line uuid] = 0;
+    if (!global pCamDist.hasKeys(line uuid)) {
+        global pCamDist[line uuid] = 4.5;
+    }
+    global pFeet[line uuid] = vec(at.x, at.y, at.z);
+    rigSpawn(line uuid, line body, at, playerApp(line uuid));
+    default.givePotionEffect(pot("Invisibility", 1, 1000000), showIcon="False", particles="None");
+    default.rideEntity(line boom);
+    select !playersByName(line uuid);
+    selected.setEntityHidden([line uuid], hidden="Enable");
+    select reset;
+}
+
+/** Removes player `uuid`'s body, boom and rig (the player may have left). */
+function bodyRemove(uuid: str) {
+    rigRemove(uuid);
+    if (global pBody.hasKeys(uuid)) {
+        select entitiesByName([global pBody[uuid], global pBoom[uuid]]);
+        selectedEntity.remove();
+        select reset;
+        global pBody.remove(uuid);
+        global pBoom.remove(uuid);
+    }
+}
+
+/** 1 when the player has a live body. */
+function hasBody(uuid: str): num {
+    if (global pBody.hasKeys(uuid)) {
+        return 1;
+    }
+    return 0;
+}
+
+/** Hides every embodied player from the player (default) who just joined. */
+function bodyHideAllFrom {
+    for (line uuid, line b of global pBody) {
+        default.setEntityHidden([line uuid], hidden="Enable");
+    }
+}
+
+/** Body location of player `uuid` (feet), from the last tick. */
+function bodyFeet(uuid: str): vec {
+    if (global pFeet.hasKeys(uuid)) {
+        return global pFeet[uuid];
+    }
+    return vec(0, 0, 0);
+}
+
+/** Teleports the body of the player (default) to `at`. */
+function bodyTeleport(at: loc) {
+    line uuid = default.uuid;
+    select entitiesByName(global pBody[line uuid]);
+    selectedEntity.teleport(at);
+    select reset;
+    global pFeet[line uuid] = vec(at.x, at.y, at.z);
+    global pVel[line uuid] = vec(0, 0, 0);
+}
+
+/** One tick of the player (default): reads input, moves the body, places
+ * the camera. Returns the body's horizontal speed (blocks per tick). */
+function bodyTick(): num {
+    line uuid = default.uuid;
+    line body = global pBody[line uuid];
+    select entitiesByName(line body);
+    line bl = selectedEntity.location;
+    line bv = selectedEntity.velocity;
+    line grounded = 0;
+    if (selectedEntity.isGrounded()) {
+        line grounded = 1;
+    }
+    select reset;
+    line feet = vec(line bl.x, line bl.y, line bl.z);
+    global pFeet[line uuid] = line feet;
+    global pGround[line uuid] = line grounded;
+
+    // Camera direction and the wanted move, relative to it.
+    line eye = default.eyeLocation;
+    line dir = line eye.getDirection();
+    line flat = vec(line dir.x, 0, line dir.z);
+    line yaw: num = global pYaw[line uuid];
+    if (line flat.len() < 0.05) {
+        line flat = yawFwd(line yaw);
+    }
+    line fwd = line flat.setLength(1);
+    line left = vec(line fwd.z, 0, 0 - line fwd.x);
+    line f = default.steerForwardMovement;
+    line sd = default.steerSidewaysMovement;
+    if (playerLocked(line uuid) == 1) {
+        line f = 0;
+        line sd = 0;
+    }
+    line wish = line fwd * f + line left * sd;
+    line speed = playerSpeed(line uuid);
+    if (global pSprint[line uuid] == 1 && f > 0 && staminaUse(line uuid, 0.35) == 1) {
+        line speed = line speed * 1.45;
+    }
+    line target = vec(0, 0, 0);
+    line moving = 0;
+    if (line wish.len() > 0.1) {
+        line target = line wish.setLength(line speed);
+        line moving = 1;
+    }
+    line v = global pVel[line uuid];
+    line k = 0.08;
+    if (line grounded == 1) {
+        line k = 0.35;
+    }
+    line v = line v + (line target - line v) * line k;
+    line v = actionMove(line uuid, line v, line fwd);
+    global pVel[line uuid] = line v;
+    line vy = line bv.y;
+    if (global pJumpQ[line uuid] > 0) {
+        global pJumpQ[line uuid] -= 1;
+        if (line grounded == 1 && playerLocked(line uuid) == 0) {
+            line vy = 0.42 * num.root(raceMul(playerRace(line uuid), "jump"));
+            global pJumpQ[line uuid] = 0;
+        }
+    }
+    select entitiesByName(line body);
+    selectedEntity.setVelocity(vec(line v.x, line vy, line v.z));
+    select reset;
+
+    // Facing: along the move, or where the camera looks while aiming.
+    if (global pAim[line uuid] > 0 || actionFacesCamera(line uuid) == 1) {
+        line want = yawOf(line fwd);
+        line yaw = line yaw + num.clamp(wrapDeg(line want - line yaw), -30, 30);
+    } else if (line moving == 1) {
+        line want = yawOf(line v);
+        line yaw = line yaw + num.clamp(wrapDeg(line want - line yaw), -22, 22);
+    }
+    global pYaw[line uuid] = wrapDeg(line yaw);
+
+    // Camera boom: behind and above the body, over the right shoulder,
+    // pulled in when a block is in the way.
+    line app = global rigApp[line uuid];
+    line s = app["scale"] as num;
+    line pivot = line feet + vec(0, 1.55 * line s + 0.25, 0);
+    line dist = global pCamDist[line uuid];
+    line want = line pivot - line dir * line dist - line left * 0.6;
+    line ray = line want - line pivot;
+    line rl = line ray.len();
+    line stop = game.raycast(loc(line pivot.x, line pivot.y, line pivot.z).setDirection(line ray), line rl + 0.3, blockCollision="Solid blocks");
+    line got = vec(line stop.x, line stop.y, line stop.z) - line pivot;
+    line cam = line want;
+    if (line got.len() < line rl + 0.25) {
+        line cam = line pivot + line ray.setLength(num.max(0.3, line got.len() - 0.35));
+    }
+    select entitiesByName(global pBoom[line uuid]);
+    selectedEntity.teleport(loc(line cam.x, line cam.y - global boomEye, line cam.z));
+    select reset;
+    return vec(line v.x, 0, line v.z).len();
+}
+
+playerevent movementKeyChange {
+    line uuid = default.uuid;
+    if (hasBody(line uuid) == 0) {
+        return;
+    }
+    if (event.movementKeyEquals(key="Jump (Space)", action="Just pressed")) {
+        global pJumpQ[line uuid] = 4;
+    } else if (event.movementKeyEquals(key="Sprint (Left Control)", action="Just pressed")) {
+        global pSprint[line uuid] = 1;
+    } else if (event.movementKeyEquals(key="Sprint (Left Control)", action="Just released")) {
+        global pSprint[line uuid] = 0;
+    } else if (event.movementKeyEquals(key="Sneak (Left Shift)", action="Just pressed")) {
+        onDodgeKey();
+    }
+}
+
+playerevent dismount {
+    // Shift would get off the boom: it is the dodge key instead.
+    if (hasBody(default.uuid) == 1) {
+        event.cancel();
+    }
+}
