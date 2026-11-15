@@ -159,6 +159,14 @@ playerevent command {
         for (line sl of ["head", "torso", "arm", "leg"]) {
             equipSet(line uuid, line sl as str, makeArmor(line sl as str, line words[2] as str, argNum(line words, 3, 3), argNum(line words, 4, 3), game.ticksSinceStartup));
         }
+    } else if (line cmd == "strip") {
+        for (line sl of ["head", "torso", "arm", "leg"]) {
+            equipSet(line uuid, line sl as str, item("air"));
+        }
+    } else if (line cmd == "face") {
+        // @face: turn the character toward the camera (for looking at it).
+        line cy = default.eyeLocation.getCoordinate(coord="Yaw");
+        global pYaw[line uuid] = wrapDeg(line cy + 180);
     } else if (line cmd == "loot") {
         repeat (8) {
             default.giveItems(rollLoot(argNum(line words, 2, 10), game.ticksSinceStartup + num.randomd(0, 100000)));

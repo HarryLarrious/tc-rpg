@@ -217,7 +217,6 @@ function rigSetMatrix(id: str, m: list[num], interp: num) {
 function rigRender(rid: str, yaw: num, pose: list[num]): vec {
     line ids = global rigParts[rid] as list[str];
     if (line ids.len() != 8) {
-        default.sendMessage(s"<red>RIGBAD %var(rid) %var(ids)");
         global rigParts.remove(rid);
         return vec(0, 0, 0);
     }
