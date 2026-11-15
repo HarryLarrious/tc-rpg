@@ -2,29 +2,41 @@
 """Animation clips: keyframed poses of the character rig, the one source of
 every animation in the game.
 
-A pose is a list of channels (CHANNELS below), in degrees, or model pixels
-for bob and fwd. A clip is a set of keyframes over normalized time 0..1;
-keys are interpolated with Catmull-Rom splines (wrapping for looping clips)
-and sampled at SAMPLES evenly spaced points.
+The style is cartoony and bouncy: straight one-piece limbs that swing wide,
+the whole body squashing on impacts and stretching on the way up, moves that
+wind up, snap through and overshoot before they settle.
+
+A pose is a list of channels (CHANNELS below), in degrees, model pixels for
+bob and fwd, and percent for sq. A clip is a set of keyframes over
+normalized time 0..1; keys are interpolated with Catmull-Rom splines
+(wrapping for looping clips) and sampled at SAMPLES evenly spaced points.
 
 Writes:
-  tc/anim_data.tc               the samples, and clipPose() to read them
+  tc/anim_data.tc               the samples, and chan() to name channels
   tools/viewer/anim_data.json   the same samples and keyframes for the viewer
 
 Conventions (rig.tc applies them):
   root_p  whole body pitch about the hips, positive tips forward
+  root_y  whole body turn, positive turns to its left
   root_r  whole body roll, positive tips to its left
   bob     raise (px), fwd: shift forward (px)
+  sq      squash and stretch (percent): positive is taller and thinner,
+          negative shorter and wider (volume kept), about the feet
   t_p     torso lean forward, t_y twist to its left, t_r tilt to its left
-  h_p     head nods down, h_y turns left
-  *_p     limb swings forward, *_o moves away from the body, *_y twists
-  el_*    elbow bends (forearm comes forward/up), kn_*: knee bends back
-  m_*/o_* held item pitch/yaw/roll relative to the hand
+  h_p     head nods down, h_y turns left, h_r tilts to its left
+  a_*_p   arm swings forward (90 points straight ahead, 180 straight up)
+  a_*_y   turns the arm's swing toward the body's left (with a_p 90 it
+          sweeps the arm level, from its right to its left)
+  a_*_o   arm moves out, away from the body
+  l_*_p   leg swings forward, l_*_o moves out
+  m_*/o_* held item pitch/yaw/roll relative to the hand (m_p negative
+          tips the item forward, down the arm's line)
 Right side is r, left side is l.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -36,30 +48,31 @@ BUILD = BUILDS["m"]
 ROOT = Path(__file__).resolve().parents[2]
 
 CHANNELS = [
-    "root_p", "root_r", "bob", "fwd",
-    "t_p", "t_y", "t_r", "h_p", "h_y",
-    "ua_r_p", "ua_r_y", "ua_r_o", "el_r",
-    "ua_l_p", "ua_l_y", "ua_l_o", "el_l",
-    "th_r_p", "th_r_o", "kn_r", "th_l_p", "th_l_o", "kn_l",
+    "root_p", "root_y", "root_r", "bob", "fwd", "sq",
+    "t_p", "t_y", "t_r", "h_p", "h_y", "h_r",
+    "a_r_p", "a_r_y", "a_r_o", "a_l_p", "a_l_y", "a_l_o",
+    "l_r_p", "l_r_o", "l_l_p", "l_l_o",
     "m_p", "m_y", "m_r", "o_p", "o_y", "o_r",
 ]
 IDX = {c: i for i, c in enumerate(CHANNELS)}
 SAMPLES = 16
 LOOP_SAMPLES = 24
+# Most clip text per generated function (characters).
+CHUNK = 7000
 
 REST = dict.fromkeys(CHANNELS, 0.0)
-REST.update(ua_r_o=5, ua_l_o=5, el_r=12, el_l=12, kn_r=3, kn_l=3, m_p=-25, o_p=-20, th_r_o=2, th_l_o=2)
+REST.update(a_r_o=3, a_l_o=3, m_p=30, o_p=30)
 
-# Masks: which channels a clip drives. "upper" clips leave the legs (and
-# the root) to the locomotion clip while the character moves.
-UPPER = [c for c in CHANNELS if c.startswith(("t_", "h_", "ua_", "el_", "m_", "o_"))]
+# Masks: which channels a clip drives. "upper" clips leave the legs, the
+# root and the squash to the locomotion clip while the character moves.
+UPPER = [c for c in CHANNELS if c.startswith(("t_", "h_", "a_", "m_", "o_"))]
 
 
 class Clip:
     def __init__(self, name: str, loop: bool = False, base: dict | None = None, hit: float = -1, mask: str = "full",
                  plant: bool = False):
         """plant: set bob each sample so the lowest point of the body
-        touches the ground (a keyed positive bob lifts it off)."""
+        touches the ground (a keyed positive bob lifts it off: a hop)."""
         self.name, self.loop, self.hit, self.mask, self.plant = name, loop, hit, mask, plant
         self.base = dict(REST)
         if base:
@@ -103,8 +116,7 @@ class Clip:
 
 
 def catmull(keys, t):
-    """Catmull-Rom (centripetal-free, uniform in key index) through keys at
-    time t."""
+    """Catmull-Rom (uniform in key index) through keys at time t."""
     j = 0
     while j + 1 < len(keys) and keys[j + 1][0] <= t:
         j += 1
@@ -155,33 +167,30 @@ def _at(o, d, k):
 
 def lowest(P: dict) -> float:
     """Lowest surface point of the posed body in model pixels, with bob 0
-    (build m): joint heights minus the thickness of the limb there."""
+    (build m): points of the body minus the body's half thickness there."""
     b = BUILD
     L, U, F = (1, 0, 0), (0, 1, 0), (0, 0, 1)
     hip = (0, b["hip"], 0)
+    if P["root_y"]:
+        L, F = _rot(L, U, P["root_y"]), _rot(F, U, P["root_y"])
     if P["root_p"]:
         U, F = _rot(U, L, P["root_p"]), _rot(F, L, P["root_p"])
     if P["root_r"]:
         U, L = _rot(U, F, -P["root_r"]), _rot(L, F, -P["root_r"])
     ta, tu, tf = _basis(L, U, F, -P["t_p"], P["t_y"], -P["t_r"])
-    neck = _at(hip, tu, b["neck"] - b["hip"])
-    ha, hu, hf = _basis(ta, tu, tf, -P["h_p"], P["h_y"], 0)
-    pts = [(hip, 2.4), (_at(hip, tu, (b["neck"] - b["hip"]) / 2), b["td"] / 2 + 0.3), (neck, 2.2),
-           (_at(neck, hu, 4.6), 4.2)]
+    H = b["neck"] - b["hip"]
+    neck = _at(hip, tu, H)
+    hu = _basis(ta, tu, tf, -P["h_p"], P["h_y"], -P["h_r"])[1]
+    pts = [(hip, 2.4), (_at(hip, tu, H / 2), b["td"] / 2 + 0.2), (neck, 2.4), (_at(neck, hu, 4.25), 4.6)]
     sh = _at(hip, tu, b["sy"] - b["hip"])
     for side, k in ((-1, "r"), (1, "l")):
         at = _at(sh, ta, side * b["sx"])
-        ua = _basis(ta, tu, tf, P[f"ua_{k}_p"], P[f"ua_{k}_y"], side * P[f"ua_{k}_o"])
-        el = _at(at, ua[1], -b["ua"])
-        fa = _basis(*ua, P[f"el_{k}"], 0, 0)
-        pts += [(at, 2.0), (el, 1.7), (_at(el, fa[1], -b["fa"]), 1.5)]
+        ab = _basis(ta, tu, tf, P[f"a_{k}_p"], P[f"a_{k}_y"], side * P[f"a_{k}_o"])[1]
+        pts += [(at, 2.2), (_at(at, ab, -b["grip"]), 2.2), (_at(at, ab, 2 - b["al"]), 1.6)]
         hp = _at(hip, L, side * b["hx"])
-        th = _basis(L, U, F, P[f"th_{k}_p"], 0, side * P[f"th_{k}_o"])
-        kn = _at(hp, th[1], -b["th"])
-        sn = _basis(*th, -P[f"kn_{k}"], 0, 0)
-        sole = _at(kn, sn[1], -b["sh"])
-        toe = _at(sole, sn[2], 2.0)
-        pts += [(kn, 1.9), (sole, 0.0), (toe, 0.0)]
+        la, lb, lc = _basis(L, U, F, P[f"l_{k}_p"], 0, side * P[f"l_{k}_o"])
+        sole = _at(hp, lb, -b["ll"])
+        pts += [(_at(hp, lb, -b["ll"] / 2), 2.0), (sole, 0.0), (_at(sole, lc, 2.6), 0.0), (_at(sole, lc, -2.2), 0.0)]
     return min(p[1] - r for p, r in pts)
 
 
@@ -196,214 +205,283 @@ def clip(*a, **kw) -> Clip:
     return c
 
 
+def toward(d: dict, k: float, base: dict | None = None) -> dict:
+    """The pose d pulled toward base (REST by default) by 1 - k: k 0.4 is
+    40% of the way from base to d."""
+    base = base or REST
+    return {c: base[c] + (v - base[c]) * k for c, v in d.items()}
+
+
+def past(a: dict, b: dict, k: float) -> dict:
+    """Overshoot: b pushed further along the line from a by k."""
+    return {c: b[c] + (b[c] - a.get(c, REST[c])) * k for c in b}
+
+
 # Locomotion ------------------------------------------------------------
 
+# Idle: breathing that squashes and stretches, a slow sway, the head
+# tilting against it.
 clip("idle", loop=True).k(
-    0, bob=0, ua_r_o=5, ua_l_o=5, el_r=12, el_l=12, t_p=1, h_p=0).k(
-    0.5, bob=0.25, ua_r_o=6.5, ua_l_o=6.5, el_r=16, el_l=16, t_p=0, h_p=-2)
+    0, sq=-1.5, a_r_o=3, a_l_o=3, t_r=0, h_r=0, h_p=1).k(
+    0.25, sq=2.5, a_r_o=6, a_l_o=6, t_r=1.5, h_r=-3, h_p=-1).k(
+    0.5, sq=-1.5, a_r_o=3, a_l_o=3, t_r=0, h_r=0, h_p=1).k(
+    0.75, sq=2.5, a_r_o=6, a_l_o=6, t_r=-1.5, h_r=3, h_p=-1)
 
-# Walk: the right leg leads at 0. Contact, passing, contact, passing.
-clip("walk", loop=True, base=dict(t_p=3), plant=True).k(
-    0, th_r_p=26, kn_r=6, th_l_p=-20, kn_l=12, ua_r_p=-20, ua_l_p=22, el_r=14, el_l=22, t_y=-5, h_y=4).k(
-    0.25, th_r_p=0, kn_r=8, th_l_p=6, kn_l=48, ua_r_p=0, ua_l_p=0, el_r=14, el_l=14, t_y=0, h_y=0).k(
-    0.5, th_r_p=-20, kn_r=12, th_l_p=26, kn_l=6, ua_r_p=22, ua_l_p=-20, el_r=22, el_l=14, t_y=5, h_y=-4).k(
-    0.75, th_r_p=6, kn_r=48, th_l_p=0, kn_l=8, ua_r_p=0, ua_l_p=0, el_r=14, el_l=14, t_y=0, h_y=0)
+# Walk: the right foot lands at 0. Straight legs and arms swing wide, the
+# body squashes on each step and hops up through the passing pose.
+WALK_HIT = dict(l_r_p=32, l_l_p=-30, a_r_p=-38, a_l_p=38, sq=-5, t_y=-7, t_r=0, h_p=4, h_r=0)
+WALK_UP = dict(l_r_p=-2, l_l_p=4, a_r_p=-4, a_l_p=4, bob=1.3, sq=4, t_y=0, t_r=-3, h_p=-2, h_r=3)
 
-# Run: longer strides, high knees, pumping bent arms, leaning in.
-clip("run", loop=True, base=dict(t_p=14, h_p=-10, el_r=85, el_l=85, ua_r_o=8, ua_l_o=8), plant=True).k(
-    0, th_r_p=55, kn_r=30, th_l_p=-35, kn_l=40, ua_r_p=-40, ua_l_p=50, bob=0, t_y=-9).k(
-    0.25, th_r_p=10, kn_r=20, th_l_p=20, kn_l=110, ua_r_p=0, ua_l_p=10, bob=1.0, t_y=0).k(
-    0.5, th_r_p=-35, kn_r=40, th_l_p=55, kn_l=30, ua_r_p=50, ua_l_p=-40, bob=0, t_y=9).k(
-    0.75, th_r_p=20, kn_r=110, th_l_p=10, kn_l=20, ua_r_p=10, ua_l_p=0, bob=1.0, t_y=0)
 
-clip("air").k(
-    0, th_r_p=40, kn_r=70, th_l_p=-15, kn_l=35, ua_r_p=-20, ua_l_p=15, ua_r_o=35, ua_l_o=35, el_r=35, el_l=40, t_p=6).k(
-    1, th_r_p=40, kn_r=70, th_l_p=-15, kn_l=35, ua_r_p=-20, ua_l_p=15, ua_r_o=35, ua_l_o=35, el_r=35, el_l=40, t_p=6)
+def mirror(p: dict) -> dict:
+    """The pose with right and left swapped (and side to side turns
+    flipped)."""
+    out = {}
+    for c, v in p.items():
+        if "_r_" in c:
+            out[c.replace("_r_", "_l_")] = v
+        elif "_l_" in c:
+            out[c.replace("_l_", "_r_")] = v
+        elif c in ("t_y", "t_r", "h_y", "h_r", "root_y", "root_r"):
+            out[c] = -v
+        else:
+            out[c] = v
+    return out
 
-# Holding stances (upper body only, mixed over locomotion when idle).
-clip("hold_1h", mask="upper").k(0, ua_r_p=14, el_r=40, m_p=-40).k(1, ua_r_p=14, el_r=40, m_p=-40)
+
+clip("walk", loop=True, base=dict(t_p=4), plant=True).k(
+    0, **WALK_HIT).k(0.25, **WALK_UP).k(0.5, **mirror(WALK_HIT)).k(0.75, **mirror(WALK_UP))
+
+# Run: leaning in, big strides and arm pumps, airborne between steps.
+RUN_HIT = dict(l_r_p=55, l_l_p=-48, a_r_p=-62, a_l_p=68, a_r_o=10, a_l_o=10, sq=-8, bob=0, t_y=-11, t_r=0, h_p=-4,
+               h_r=0)
+RUN_UP = dict(l_r_p=-8, l_l_p=18, a_r_p=-10, a_l_p=16, a_r_o=12, a_l_o=12, sq=7, bob=2.6, t_y=0, t_r=-4, h_p=-10,
+              h_r=4)
+clip("run", loop=True, base=dict(t_p=14), plant=True).k(
+    0, **RUN_HIT).k(0.25, **RUN_UP).k(0.5, **mirror(RUN_HIT)).k(0.75, **mirror(RUN_UP))
+
+# In the air: arms thrown up, legs kicking, stretched tall (played as a
+# loop so the arms and legs flail).
+AIR = dict(a_r_p=165, a_l_p=150, a_r_o=14, a_l_o=22, l_r_p=26, l_l_p=-14, l_r_o=4, l_l_o=4, sq=6, h_p=-6, t_p=-4,
+           m_p=60, o_p=60)
+clip("air", loop=True).k(0, **AIR).k(0.5, **mirror(AIR))
+
+# Landing (added over locomotion): squash flat, arms fling out, spring back.
+clip("land").k(0).k(
+    0.18, sq=-16, a_r_o=38, a_l_o=38, l_r_o=8, l_l_o=8, h_p=10, t_p=8).k(
+    0.45, sq=8, a_r_o=8, a_l_o=8, h_p=-5, t_p=-3).k(
+    0.72, sq=-3, a_r_o=5, a_l_o=5, h_p=2).k(1)
+
+# Holding stances (upper body only, added over locomotion).
+clip("hold_1h", mask="upper").k(0, a_r_p=28, a_r_o=6, m_p=10).k(1, a_r_p=28, a_r_o=6, m_p=10)
 clip("hold_2h", mask="upper").k(
-    0, ua_r_p=20, ua_r_o=2, el_r=75, ua_l_p=30, ua_l_o=-8, el_l=80, t_y=10, m_p=-10, m_y=-20).k(
-    1, ua_r_p=20, ua_r_o=2, el_r=75, ua_l_p=30, ua_l_o=-8, el_l=80, t_y=10, m_p=-10, m_y=-20)
-clip("hold_staff", mask="upper").k(0, ua_r_p=12, ua_r_o=8, el_r=70, m_p=8).k(1, ua_r_p=12, ua_r_o=8, el_r=70, m_p=8)
-clip("hold_bow", mask="upper").k(0, ua_l_p=20, el_l=40, o_p=-30, o_y=0).k(1, ua_l_p=20, el_l=40, o_p=-30)
+    0, a_r_p=42, a_r_y=28, a_r_o=0, t_y=12, h_y=-8, m_p=-5, m_y=0).k(
+    1, a_r_p=42, a_r_y=28, a_r_o=0, t_y=12, h_y=-8, m_p=-5, m_y=0)
+clip("hold_staff", mask="upper").k(0, a_r_p=22, a_r_o=10, m_p=35).k(1, a_r_p=22, a_r_o=10, m_p=35)
+clip("hold_bow", mask="upper").k(0, a_l_p=26, a_l_o=6, o_p=60).k(1, a_l_p=26, a_l_o=6, o_p=60)
 
 # Moves ------------------------------------------------------------------
 
-# Dodge roll: a forward roll in the direction of travel. The body tucks,
-# pitches through a full turn and rises out of it.
-clip("roll", base=dict(t_p=10), plant=True).k(
-    0, root_p=0, th_r_p=10, th_l_p=10, kn_r=10, kn_l=10, ua_r_p=20, ua_l_p=20).k(
-    0.15, root_p=40, t_p=40, th_r_p=80, th_l_p=70, kn_r=100, kn_l=110, ua_r_p=70, ua_l_p=70, el_r=80, el_l=80, h_p=45).k(
-    0.5, root_p=190, t_p=50, th_r_p=115, th_l_p=115, kn_r=140, kn_l=140, ua_r_p=90, ua_l_p=90, el_r=110, el_l=110, h_p=50).k(
-    0.8, root_p=320, t_p=35, th_r_p=90, th_l_p=60, kn_r=115, kn_l=85, ua_r_p=40, ua_l_p=40, el_r=60, el_l=60, h_p=20).k(
-    1, root_p=360, t_p=8, th_r_p=15, th_l_p=-5, kn_r=20, kn_l=10, ua_r_p=10, ua_l_p=10, el_r=20, el_l=20, h_p=0)
+# Dodge roll: squash down, dive forward stretched, tuck into a ball and
+# roll over, land in a squash and pop up with the arms flung out.
+clip("roll", plant=True).k(0).k(
+    0.1, sq=-12, t_p=18, h_p=12, a_r_p=-30, a_l_p=-30, l_r_p=10, l_l_p=10).k(
+    0.24, root_p=60, sq=10, bob=2, t_p=10, a_r_p=170, a_l_p=170, a_r_o=8, a_l_o=8, l_r_p=-25, l_l_p=-15).k(
+    0.42, root_p=190, sq=-8, t_p=45, h_p=40, a_r_p=110, a_l_p=110, a_r_o=-4, a_l_o=-4, l_r_p=95, l_l_p=95).k(
+    0.62, root_p=310, sq=-4, t_p=30, h_p=20, a_r_p=70, a_l_p=70, l_r_p=60, l_l_p=40).k(
+    0.76, root_p=360, sq=-15, t_p=10, h_p=8, a_r_p=10, a_l_p=10, a_r_o=40, a_l_o=40, l_r_p=10, l_l_p=-6,
+    l_r_o=6, l_l_o=6).k(
+    0.88, root_p=360, sq=9, bob=0.6, t_p=-4, h_p=-6, h_r=6, a_r_o=55, a_l_o=55).k(
+    1, root_p=360)
 
-clip("hurt", plant=True).k(0, t_p=0).k(
-    0.25, t_p=-16, h_p=-18, ua_r_p=-15, ua_l_p=-15, ua_r_o=25, ua_l_o=25, el_r=40, el_l=40, bob=-0.5).k(
-    1, t_p=0)
+# Hurt: knocked back in a squash, wobbles back upright.
+clip("hurt", plant=True).k(0).k(
+    0.18, t_p=-20, h_p=-24, h_r=-8, sq=-12, a_r_p=-25, a_l_p=-20, a_r_o=30, a_l_o=34, fwd=-1.5).k(
+    0.42, t_p=6, h_p=8, h_r=6, sq=6, a_r_o=10, a_l_o=12).k(
+    0.68, t_p=-3, h_p=-3, h_r=-3, sq=-2).k(1)
 
-# Death: knees give, then the body falls back and lies still.
-clip("death", plant=True).k(0, root_p=0).k(
-    0.2, root_p=-5, kn_r=60, kn_l=50, th_r_p=30, th_l_p=25, t_p=20, h_p=20, ua_r_p=10, ua_l_p=10).k(
-    0.45, root_p=-60, kn_r=40, kn_l=30, th_r_p=20, th_l_p=10, t_p=5, h_p=-10, ua_r_p=0, ua_l_p=5, ua_r_o=30, ua_l_o=25).k(
-    0.6, root_p=-90, kn_r=10, kn_l=25, th_r_p=5, th_l_p=12, t_p=0, h_p=5, ua_r_p=5, ua_l_p=8, ua_r_o=55, ua_l_o=40, el_r=20, el_l=15, th_r_o=8, th_l_o=6).k(
-    1, root_p=-90, kn_r=10, kn_l=25, th_r_p=5, th_l_p=12, t_p=0, h_p=5, h_y=25, ua_r_p=5, ua_l_p=8, ua_r_o=55, ua_l_o=40, el_r=20, el_l=15, th_r_o=8, th_l_o=6)
+# Death: a squash, a stretched hop with the arms up, a flop onto the back,
+# one bounce and stillness.
+DEAD = dict(root_p=-90, root_y=30, a_r_p=8, a_l_p=12, a_r_o=70, a_l_o=60, l_r_o=12, l_l_o=9, l_r_p=6, l_l_p=-4,
+            h_y=25, h_p=6)
+clip("death", plant=True).k(0).k(
+    0.14, sq=-12, h_p=20, a_r_o=20, a_l_o=20, t_p=10).k(
+    0.3, bob=4, sq=12, root_p=-20, root_y=15, a_r_p=165, a_l_p=155, a_r_o=10, a_l_o=14, h_p=-20, l_r_p=20).k(
+    0.52, **dict(DEAD, sq=-14)).k(
+    0.64, **dict(DEAD, root_p=-82, bob=1.6, sq=7, a_r_o=55, a_l_o=48)).k(
+    0.78, **dict(DEAD, sq=-4)).k(
+    1, **DEAD)
 
-# Casting: both hands gather in front, then thrust out at the release.
+# Casting: arms swing wide to gather, then thrust forward, overshoot and
+# spring back.
+CAST = dict(a_r_p=98, a_l_p=98, a_r_o=-6, a_l_o=-6, t_p=10, h_p=-4, m_p=-60)
 clip("cast", hit=0.5, mask="upper").k(0).k(
-    0.3, ua_r_p=60, ua_l_p=60, ua_r_o=-5, ua_l_o=-5, el_r=95, el_l=95, t_p=-5, h_p=-5, m_p=-90).k(
-    0.5, ua_r_p=95, ua_l_p=95, ua_r_o=8, ua_l_o=8, el_r=10, el_l=10, t_p=8, m_p=-90).k(
-    0.75, ua_r_p=80, ua_l_p=70, ua_r_o=10, ua_l_o=10, el_r=25, el_l=30, t_p=4, m_p=-80).k(1)
+    0.25, a_r_p=40, a_l_p=40, a_r_o=55, a_l_o=55, t_p=-8, h_p=-10, m_p=40).k(
+    0.42, a_r_p=70, a_l_p=70, a_r_o=30, a_l_o=30, t_p=-2).k(
+    0.52, **CAST).k(
+    0.62, **past(dict(a_r_p=70, a_l_p=70, t_p=-2), CAST, 0.25)).k(
+    0.78, **toward(CAST, 0.85)).k(1)
 
-# Bow: draw (hold the end) and release.
-clip("draw", mask="upper", base=dict(t_y=-35, h_y=35)).k(
-    0, ua_l_p=60, el_l=30, ua_r_p=40, el_r=60, o_p=-30).k(
-    0.5, ua_l_p=90, ua_l_o=-5, el_l=0, ua_r_p=85, ua_r_y=-20, el_r=150, o_p=-90, o_r=0).k(
-    1, ua_l_p=90, ua_l_o=-5, el_l=0, ua_r_p=88, ua_r_y=-30, ua_r_o=10, el_r=160, o_p=-90)
-clip("shoot", hit=0.15, mask="upper", base=dict(t_y=-35, h_y=35)).k(
-    0, ua_l_p=90, ua_l_o=-5, el_l=0, ua_r_p=85, el_r=150, o_p=-90).k(
-    0.2, ua_l_p=92, el_l=0, ua_r_p=70, ua_r_o=40, el_r=40, o_p=-90).k(
-    1, ua_l_p=40, el_l=30, ua_r_p=15, el_r=20, o_p=-40)
+# Bow: draw (hold the end) and release. The body turns side on, the bow
+# arm points at the target, the string hand pulls back.
+DRAWN = dict(t_y=-38, h_y=36, a_l_p=90, a_l_y=36, a_l_o=0, a_r_p=88, a_r_y=58, a_r_o=0, o_p=0, m_p=0)
+clip("draw", mask="upper").k(
+    0, t_y=-20, h_y=18, a_l_p=60, a_l_y=20, a_r_p=40, a_r_y=30, o_p=20).k(
+    0.55, **dict(DRAWN, a_l_p=96, t_y=-42)).k(
+    0.8, **dict(DRAWN, a_l_p=88)).k(
+    1, **DRAWN)
+clip("shoot", hit=0.15, mask="upper").k(
+    0, **DRAWN).k(
+    0.15, **dict(DRAWN, a_r_p=95, a_r_y=-10, a_r_o=45, a_l_p=100)).k(
+    0.35, **dict(DRAWN, a_r_p=70, a_r_y=-20, a_r_o=35, a_l_p=84)).k(
+    0.6, t_y=-15, h_y=12, a_l_p=50, a_l_y=10, a_r_p=20, a_r_o=10, o_p=40).k(
+    1)
 
 # NPC gestures.
-clip("wave", loop=True, mask="upper").k(0, ua_l_p=20, ua_l_o=70, el_l=100, ua_l_y=-30).k(
-    0.5, ua_l_p=20, ua_l_o=95, el_l=70, ua_l_y=-30)
-clip("talk", loop=True, mask="upper").k(0, ua_r_p=30, el_r=60, ua_r_o=10).k(
-    0.33, ua_r_p=40, el_r=80, ua_r_o=20, h_p=-3).k(0.66, ua_r_p=25, el_r=50, ua_r_o=8, ua_l_p=20, el_l=40, h_p=2)
+clip("wave", loop=True, mask="upper").k(
+    0, a_l_p=150, a_l_o=22, a_l_y=10, h_r=5, t_r=2, o_p=60).k(
+    0.5, a_l_p=155, a_l_o=52, a_l_y=10, h_r=-2, t_r=-1, o_p=60)
+clip("talk", loop=True, mask="upper").k(
+    0, a_r_p=38, a_r_o=14, a_l_p=8, h_p=0, h_r=2).k(
+    0.33, a_r_p=55, a_r_o=26, a_l_p=12, a_l_o=10, h_p=-4, h_r=-3).k(
+    0.66, a_r_p=30, a_r_o=10, a_l_p=34, a_l_o=18, h_p=3, h_r=4)
 
 
 def attack(name: str, windup: dict, strike: dict, follow: dict | None = None, hit: float = 0.45,
            legs: dict | None = None):
-    """An attack: anticipation, wind up, a fast strike through the hit
-    point, follow through and recovery to the stance. legs: stance of the
-    legs during the swing."""
-    st = dict(legs or dict(th_r_p=-12, kn_r=15, th_l_p=22, kn_l=25, th_r_o=6, th_l_o=6))
-    c = clip(name, hit=hit, mask="full", plant=True)
+    """An attack in five beats: a squashed anticipation, the wind up held
+    stretched, a snap through the hit point, an overshoot past it and a
+    springy settle back to the stance. legs: the stance of the legs."""
+    st = dict(legs or dict(l_r_p=-14, l_l_p=20, l_r_o=5, l_l_o=5))
+    follow = follow or past(windup, strike, 0.18)
+    c = clip(name, hit=hit, plant=True)
     c.k(0)
-    w = dict(windup)
-    w.update(st)
-    c.k(0.3, **w)
-    s = dict(strike)
-    s.update(st)
-    c.k(hit + 0.1, **s)
-    if follow:
-        f = dict(follow)
-        f.update(st)
-        c.k(min(0.8, hit + 0.25), **f)
-    c.k(1)
+    c.k(0.12, **toward(windup, 0.45), **toward(st, 0.5), sq=-7)
+    c.k(hit - 0.08, **windup, **st, sq=5)
+    c.k(hit + 0.05, **strike, **st, sq=-7)
+    c.k(min(0.8, hit + 0.2), **follow, **st, sq=4)
+    settle = dict(toward(follow, 0.45), **toward(st, 0.5), sq=-2)
+    end = {}
+    if abs(follow.get("root_y", 0)) > 180:
+        # A full spin ends a turn round, not unwound back to 0.
+        settle["root_y"] = end["root_y"] = math.copysign(360, follow["root_y"])
+    c.k(min(0.9, hit + 0.36), **settle)
+    c.k(1, **end)
     return c
 
 
-# One-handed blades and blunt weapons: a cut from the right, a backhand
-# from the left, and an overhead blow; the heavy is a spinning cleave.
+# One-handed blades and blunt weapons. Level sweeps swing the straight arm
+# with a_*_y; m_p -90 lays the blade along the arm.
 attack("atk_blade_1",
-       dict(ua_r_p=70, ua_r_o=75, ua_r_y=10, el_r=90, t_y=-40, t_p=4, m_p=-70, m_r=-20),
-       dict(ua_r_p=80, ua_r_o=-25, el_r=15, t_y=35, t_p=8, m_p=-75, m_r=-10),
-       dict(ua_r_p=60, ua_r_o=-40, el_r=25, t_y=40, m_p=-60))
+       dict(a_r_p=88, a_r_y=-75, a_r_o=4, t_y=-35, t_p=2, m_p=-95, m_r=-10),
+       dict(a_r_p=88, a_r_y=45, a_r_o=0, t_y=30, t_p=8, m_p=-90, m_r=-10, fwd=1.5),
+       dict(a_r_p=82, a_r_y=70, t_y=42, t_p=6, m_p=-85, m_r=-10, fwd=1.5))
 attack("atk_blade_2",
-       dict(ua_r_p=75, ua_r_o=-40, el_r=95, t_y=40, t_p=4, m_p=-80, m_r=170),
-       dict(ua_r_p=85, ua_r_o=70, el_r=10, t_y=-38, t_p=8, m_p=-85, m_r=170),
-       dict(ua_r_p=70, ua_r_o=85, el_r=25, t_y=-42, m_p=-70, m_r=170))
+       dict(a_r_p=85, a_r_y=70, t_y=38, t_p=2, m_p=-95, m_r=180),
+       dict(a_r_p=88, a_r_y=-50, t_y=-32, t_p=8, m_p=-90, m_r=180, fwd=1.5),
+       dict(a_r_p=82, a_r_y=-75, t_y=-42, t_p=6, m_p=-85, m_r=180, fwd=1.5))
 attack("atk_blade_3",
-       dict(ua_r_p=165, ua_r_o=15, el_r=70, t_p=-12, h_p=-8, m_p=-20),
-       dict(ua_r_p=45, ua_r_o=5, el_r=10, t_p=22, h_p=10, m_p=-55, fwd=2),
-       dict(ua_r_p=20, el_r=20, t_p=18, m_p=-40, fwd=2), hit=0.5,
-       legs=dict(th_r_p=-20, kn_r=20, th_l_p=35, kn_l=45))
+       dict(a_r_p=178, a_r_o=8, t_p=-14, h_p=-8, m_p=-10),
+       dict(a_r_p=45, a_r_o=4, t_p=24, h_p=10, m_p=-70, fwd=2.5),
+       dict(a_r_p=25, t_p=28, h_p=12, m_p=-60, fwd=2.5), hit=0.5,
+       legs=dict(l_r_p=-24, l_l_p=34, l_r_o=4, l_l_o=4))
 attack("atk_blade_4",
-       dict(ua_r_p=90, ua_r_o=80, el_r=60, t_y=-80, t_p=5, m_p=-80),
-       dict(ua_r_p=80, ua_r_o=-30, el_r=5, t_y=80, t_p=12, m_p=-80, fwd=1),
-       dict(ua_r_p=70, ua_r_o=-50, el_r=15, t_y=110, m_p=-70), hit=0.5,
-       legs=dict(th_r_p=-25, kn_r=25, th_l_p=30, kn_l=45, th_r_o=10, th_l_o=10))
+       dict(a_r_p=88, a_r_y=-80, root_y=-40, t_y=-30, t_p=4, m_p=-95),
+       dict(a_r_p=88, a_r_y=40, root_y=200, t_y=20, t_p=10, m_p=-90, fwd=1.5),
+       dict(a_r_p=85, a_r_y=50, root_y=330, t_y=25, m_p=-85, fwd=1.5), hit=0.5,
+       legs=dict(l_r_p=-24, l_l_p=28, l_r_o=10, l_l_o=10))
 
-# Two-handed heavies: both hands on the hilt, big body turns.
-TWO = dict(ua_l_o=-20)
+# Two-handed heavies: the left hand stays on the hilt (rig IK); big body
+# turns and slams.
 attack("atk_heavy_1",
-       dict(ua_r_p=80, ua_r_o=60, el_r=80, ua_l_p=70, ua_l_o=10, el_l=100, t_y=-55, t_p=5, m_p=-80, m_y=-10),
-       dict(ua_r_p=75, ua_r_o=-15, el_r=20, ua_l_p=80, ua_l_o=-35, el_l=40, t_y=50, t_p=12, m_p=-80, fwd=1.5),
-       dict(ua_r_p=60, ua_r_o=-25, el_r=35, ua_l_p=60, ua_l_o=-40, el_l=50, t_y=60, m_p=-70))
+       dict(a_r_p=95, a_r_y=-60, t_y=-50, t_p=4, m_p=-80, m_y=-10),
+       dict(a_r_p=85, a_r_y=50, t_y=48, t_p=12, m_p=-85, fwd=2),
+       dict(a_r_p=80, a_r_y=70, t_y=60, t_p=10, m_p=-80, fwd=2))
 attack("atk_heavy_2",
-       dict(ua_r_p=70, ua_r_o=-20, el_r=90, ua_l_p=75, ua_l_o=-40, el_l=80, t_y=55, t_p=5, m_p=-80, m_r=170),
-       dict(ua_r_p=80, ua_r_o=55, el_r=20, ua_l_p=70, ua_l_o=15, el_l=40, t_y=-50, t_p=12, m_p=-80, m_r=170, fwd=1.5),
-       dict(ua_r_p=65, ua_r_o=65, el_r=35, ua_l_p=55, ua_l_o=20, el_l=55, t_y=-60, m_p=-70, m_r=170))
+       dict(a_r_p=90, a_r_y=75, t_y=50, t_p=4, m_p=-85, m_r=180),
+       dict(a_r_p=85, a_r_y=-45, t_y=-48, t_p=12, m_p=-85, m_r=180, fwd=2),
+       dict(a_r_p=80, a_r_y=-60, t_y=-60, t_p=10, m_p=-80, m_r=180, fwd=2))
 attack("atk_heavy_3",
-       dict(ua_r_p=170, ua_r_o=10, el_r=60, ua_l_p=170, ua_l_o=-10, el_l=60, t_p=-15, h_p=-10, m_p=-10),
-       dict(ua_r_p=40, ua_r_o=5, el_r=5, ua_l_p=40, ua_l_o=-10, el_l=5, t_p=30, h_p=15, m_p=-45, fwd=3, bob=-1.5),
-       dict(ua_r_p=25, el_r=10, ua_l_p=25, el_l=10, t_p=28, m_p=-30, fwd=3, bob=-1.5), hit=0.5,
-       legs=dict(th_r_p=-25, kn_r=30, th_l_p=40, kn_l=60))
+       dict(a_r_p=180, a_r_y=20, t_p=-18, h_p=-10, m_p=0, bob=1),
+       dict(a_r_p=40, a_r_y=20, t_p=32, h_p=14, m_p=-60, fwd=3.5),
+       dict(a_r_p=25, a_r_y=20, t_p=34, h_p=14, m_p=-50, fwd=3.5), hit=0.5,
+       legs=dict(l_r_p=-28, l_l_p=40, l_r_o=6, l_l_o=6))
 attack("atk_heavy_4",
-       dict(ua_r_p=85, ua_r_o=70, el_r=50, ua_l_p=80, ua_l_o=0, el_l=70, t_y=-90, t_p=8, m_p=-85),
-       dict(ua_r_p=80, ua_r_o=-20, el_r=10, ua_l_p=80, ua_l_o=-30, el_l=30, t_y=90, t_p=12, m_p=-85, fwd=1),
-       dict(ua_r_p=70, ua_r_o=-30, el_r=20, ua_l_p=60, ua_l_o=-40, el_l=40, t_y=130, m_p=-80), hit=0.5,
-       legs=dict(th_r_p=-25, kn_r=35, th_l_p=30, kn_l=45, th_r_o=12, th_l_o=12))
+       dict(a_r_p=92, a_r_y=-70, root_y=-50, t_y=-35, t_p=6, m_p=-90),
+       dict(a_r_p=90, a_r_y=40, root_y=250, t_y=25, t_p=12, m_p=-90, fwd=1.5),
+       dict(a_r_p=88, a_r_y=50, root_y=345, t_y=25, t_p=10, m_p=-85, fwd=1.5), hit=0.5,
+       legs=dict(l_r_p=-26, l_l_p=30, l_r_o=12, l_l_o=12))
 
 # Daggers and fists: quick jabs and slashes, a lunging stab.
 attack("atk_dagger_1",
-       dict(ua_r_p=20, ua_r_o=20, el_r=110, t_y=-20, m_p=20),
-       dict(ua_r_p=88, ua_r_o=0, el_r=5, t_y=20, t_p=8, m_p=-90, fwd=1.5),
+       dict(a_r_p=30, a_r_o=12, t_y=-22, m_p=-20),
+       dict(a_r_p=92, a_r_o=0, t_y=22, t_p=8, m_p=-95, fwd=2),
        hit=0.4)
 attack("atk_dagger_2",
-       dict(ua_r_p=80, ua_r_o=70, el_r=80, t_y=-30, m_p=-80),
-       dict(ua_r_p=75, ua_r_o=-35, el_r=15, t_y=35, m_p=-80),
+       dict(a_r_p=85, a_r_y=-70, t_y=-30, m_p=-90),
+       dict(a_r_p=85, a_r_y=40, t_y=32, m_p=-90),
        hit=0.4)
 attack("atk_dagger_3",
-       dict(ua_r_p=150, ua_r_o=20, el_r=80, t_p=-8, m_p=60),
-       dict(ua_r_p=70, ua_r_o=0, el_r=10, t_p=15, m_p=-95, fwd=2),
+       dict(a_r_p=170, a_r_o=12, t_p=-10, m_p=20),
+       dict(a_r_p=60, a_r_o=0, t_p=16, m_p=-110, fwd=2),
        hit=0.45)
 attack("atk_dagger_4",
-       dict(ua_r_p=10, ua_r_o=15, el_r=120, t_y=-30, t_p=-5, m_p=30),
-       dict(ua_r_p=90, el_r=0, t_y=25, t_p=15, m_p=-95, fwd=4, bob=-1),
-       hit=0.45, legs=dict(th_r_p=-35, kn_r=25, th_l_p=50, kn_l=70))
+       dict(a_r_p=10, a_r_o=14, t_y=-30, t_p=-6, m_p=0),
+       dict(a_r_p=92, t_y=25, t_p=16, m_p=-95, fwd=5, bob=1),
+       hit=0.45, legs=dict(l_r_p=-38, l_l_p=50))
 attack("atk_fist_1",
-       dict(ua_r_p=30, ua_r_o=10, el_r=120, t_y=-15),
-       dict(ua_r_p=88, ua_r_o=0, el_r=0, t_y=25, t_p=6, fwd=1), hit=0.4)
+       dict(a_r_p=20, a_r_o=10, t_y=-18),
+       dict(a_r_p=92, a_r_o=0, t_y=25, t_p=8, fwd=1.5), hit=0.4)
 attack("atk_fist_2",
-       dict(ua_l_p=30, ua_l_o=10, el_l=120, t_y=15),
-       dict(ua_l_p=88, ua_l_o=0, el_l=0, t_y=-25, t_p=6, fwd=1), hit=0.4)
+       dict(a_l_p=20, a_l_o=10, t_y=18),
+       dict(a_l_p=92, a_l_o=0, t_y=-25, t_p=8, fwd=1.5), hit=0.4)
 attack("atk_fist_3",
-       dict(ua_r_p=-10, ua_r_o=20, el_r=130, t_p=-8, bob=-1.5),
-       dict(ua_r_p=150, ua_r_o=5, el_r=40, t_p=-10, bob=1, h_p=-15), hit=0.45)
+       dict(a_r_p=-20, a_r_o=16, t_p=-8, bob=0),
+       dict(a_r_p=170, a_r_o=4, t_p=-12, h_p=-16, bob=3), hit=0.45)
 attack("atk_fist_4",
-       dict(ua_r_p=10, el_r=120, ua_l_p=10, el_l=120, t_p=-5, bob=-1),
-       dict(ua_r_p=90, el_r=0, ua_l_p=90, el_l=0, t_p=12, fwd=4), hit=0.45,
-       legs=dict(th_r_p=-35, kn_r=25, th_l_p=50, kn_l=70))
+       dict(a_r_p=10, a_l_p=10, a_r_o=12, a_l_o=12, t_p=-6),
+       dict(a_r_p=92, a_l_p=92, a_r_o=-4, a_l_o=-4, t_p=14, fwd=5), hit=0.45,
+       legs=dict(l_r_p=-38, l_l_p=50))
 
-# Spears and polearms: thrusts from a two-handed guard, a sweep, a lunge.
-SPEAR_GUARD = dict(ua_r_p=30, el_r=70, ua_l_p=60, ua_l_o=-15, el_l=40, m_p=-100, t_y=-20)
+# Spears and polearms (two-handed: rig IK keeps the left hand on the
+# shaft): thrusts, a sweep and a lunge.
+SPEAR = dict(a_r_p=60, a_r_y=20, t_y=-25, m_p=-90)
 attack("atk_spear_1",
-       dict(SPEAR_GUARD, ua_r_p=20, el_r=100, t_y=-30),
-       dict(SPEAR_GUARD, ua_r_p=75, el_r=10, ua_l_p=85, el_l=10, t_y=10, t_p=10, fwd=2.5), hit=0.42)
+       dict(SPEAR, a_r_p=40, t_y=-35, fwd=-1),
+       dict(SPEAR, a_r_p=88, a_r_y=10, t_y=10, t_p=10, fwd=3), hit=0.42)
 attack("atk_spear_2",
-       dict(SPEAR_GUARD, ua_r_p=25, el_r=95, t_y=-35),
-       dict(SPEAR_GUARD, ua_r_p=80, el_r=5, ua_l_p=85, el_l=5, t_y=15, t_p=12, fwd=3), hit=0.42)
+       dict(SPEAR, a_r_p=35, t_y=-40, fwd=-1),
+       dict(SPEAR, a_r_p=90, a_r_y=5, t_y=15, t_p=12, fwd=3.5), hit=0.42)
 attack("atk_spear_3",
-       dict(ua_r_p=80, ua_r_o=60, el_r=60, ua_l_p=70, ua_l_o=20, el_l=60, t_y=-60, m_p=-90),
-       dict(ua_r_p=80, ua_r_o=-20, el_r=15, ua_l_p=80, ua_l_o=-30, el_l=20, t_y=60, m_p=-90), hit=0.5)
+       dict(a_r_p=88, a_r_y=-70, t_y=-55, m_p=-90),
+       dict(a_r_p=88, a_r_y=45, t_y=50, m_p=-90), hit=0.5)
 attack("atk_spear_4",
-       dict(SPEAR_GUARD, ua_r_p=10, el_r=120, t_y=-40, t_p=-5),
-       dict(SPEAR_GUARD, ua_r_p=88, el_r=0, ua_l_p=88, el_l=0, t_y=20, t_p=18, fwd=6, bob=-1.5), hit=0.45,
-       legs=dict(th_r_p=-40, kn_r=20, th_l_p=55, kn_l=75))
+       dict(SPEAR, a_r_p=20, t_y=-45, t_p=-8, fwd=-1.5),
+       dict(SPEAR, a_r_p=92, a_r_y=5, t_y=20, t_p=20, fwd=7, bob=1), hit=0.45,
+       legs=dict(l_r_p=-42, l_l_p=55))
 
-# Staves and wands: a two-handed sweep and an overhead smash.
+# Staves and wands: a sweep and an overhead smash.
 attack("atk_staff_1",
-       dict(ua_r_p=70, ua_r_o=70, el_r=80, ua_l_p=40, el_l=80, t_y=-40, m_p=-80),
-       dict(ua_r_p=80, ua_r_o=-20, el_r=20, ua_l_p=60, ua_l_o=-20, el_l=40, t_y=40, m_p=-80))
+       dict(a_r_p=88, a_r_y=-70, t_y=-40, m_p=-90),
+       dict(a_r_p=88, a_r_y=40, t_y=40, m_p=-90))
 attack("atk_staff_4",
-       dict(ua_r_p=170, el_r=50, ua_l_p=160, el_l=50, t_p=-12, m_p=-10),
-       dict(ua_r_p=50, el_r=5, ua_l_p=50, el_l=5, t_p=25, m_p=-50, fwd=2), hit=0.5,
-       legs=dict(th_r_p=-25, kn_r=30, th_l_p=40, kn_l=55))
+       dict(a_r_p=178, t_p=-14, m_p=0, bob=1),
+       dict(a_r_p=50, t_p=26, m_p=-60, fwd=2.5), hit=0.5,
+       legs=dict(l_r_p=-26, l_l_p=40))
 
 # Weapon arts.
 attack("art_spin",
-       dict(ua_r_p=85, ua_r_o=75, el_r=30, ua_l_p=40, ua_l_o=60, el_l=30, t_y=-60, m_p=-85),
-       dict(ua_r_p=85, ua_r_o=70, el_r=10, ua_l_p=40, ua_l_o=60, el_l=30, t_y=60, m_p=-85, root_r=0), hit=0.5)
+       dict(a_r_p=90, a_r_o=70, a_l_p=60, a_l_o=70, root_y=-30, m_p=-90),
+       dict(a_r_p=90, a_r_o=75, a_l_p=60, a_l_o=75, root_y=330, m_p=-90, bob=1.5),
+       dict(a_r_p=88, a_r_o=70, a_l_p=55, a_l_o=70, root_y=380, m_p=-85), hit=0.5)
 attack("art_slam",
-       dict(ua_r_p=175, el_r=40, ua_l_p=175, el_l=40, t_p=-20, bob=3, m_p=-10),
-       dict(ua_r_p=30, el_r=0, ua_l_p=30, el_l=0, t_p=35, bob=-3, m_p=-40, fwd=2), hit=0.55,
-       legs=dict(th_r_p=50, kn_r=100, th_l_p=50, kn_l=100))
+       dict(a_r_p=180, a_l_p=180, t_p=-20, bob=4, m_p=0),
+       dict(a_r_p=35, a_l_p=35, t_p=34, m_p=-60, fwd=2), hit=0.55,
+       legs=dict(l_r_p=-20, l_l_p=30, l_r_o=14, l_l_o=14))
 attack("art_roar",
-       dict(ua_r_p=10, ua_r_o=60, el_r=90, ua_l_p=10, ua_l_o=60, el_l=90, t_p=10, h_p=10),
-       dict(ua_r_p=20, ua_r_o=80, el_r=60, ua_l_p=20, ua_l_o=80, el_l=60, t_p=-15, h_p=-25), hit=0.4)
+       dict(a_r_p=20, a_r_o=40, a_l_p=20, a_l_o=40, t_p=14, h_p=14),
+       dict(a_r_p=40, a_r_o=85, a_l_p=40, a_l_o=85, t_p=-16, h_p=-28, bob=1), hit=0.4,
+       legs=dict(l_r_o=12, l_l_o=12))
 
 
 # ---------------------------------------------------------------- output
@@ -430,6 +508,14 @@ def main() -> None:
         "declare global animData: dict[list];",
         "/** Per clip: [samples, loop 0/1, hit time (-1 none), upper-only 0/1]. */",
         "declare global animMeta: dict[list];",
+        "/** Version of the loaded clip data (see animVersion). */",
+        "declare global animVer: str;",
+        "",
+        "/** Version of the clip data in this code: when it differs from",
+        " * animVer, the loaded clips are stale (reload with loadClips). */",
+        "function animVersion(): str {",
+        "    return \"@VER@\";",
+        "}",
         "",
         "/** Channels in a pose. */",
         "function poseLen(): num {",
@@ -441,27 +527,45 @@ def main() -> None:
         f"    return [{', '.join(fmt(REST[c]) for c in CHANNELS)}];",
         "}",
         "",
-        "function loadAnimData {",
+        "/** Loads every clip. The clips are split over small functions",
+        " * (clipsN): DiamondFire can't pick a very large code line back up,",
+        " * so one huge function could never be replaced on the plot. */",
+        "function loadClips {",
         "    global animStr = {};",
         "    global animData = {};",
         "    global animMeta = {};",
+        "    global stanceDelta = {};",
+        "    global animVer = animVersion();",
     ]
+    chunks: list[list[str]] = [[]]
+    size = 0
     for c in CLIPS:
         n = LOOP_SAMPLES if c.loop else SAMPLES
         smp = c.sample(n)
         flat = [fmt(v) for row in smp for v in row]
-        lines.append(f"    global animStr[\"{c.name}\"] = \"{','.join(flat)}\";")
-        lines.append(f"    global animMeta[\"{c.name}\"] = [{n}, {int(c.loop)}, {fmt(c.hit)}, {int(c.mask == 'upper')}];")
+        body = [f"    global animStr[\"{c.name}\"] = \"{','.join(flat)}\";",
+                f"    global animMeta[\"{c.name}\"] = [{n}, {int(c.loop)}, {fmt(c.hit)}, {int(c.mask == 'upper')}];"]
+        if size and size + len(body[0]) > CHUNK:
+            chunks.append([])
+            size = 0
+        chunks[-1] += body
+        size += len(body[0])
         data[c.name] = {"loop": c.loop, "hit": c.hit, "mask": c.mask, "samples": [[round(v, 2) for v in r] for r in smp],
                         "keys": [[t, [round(v, 2) for v in p]] for t, p in c.poses()]}
-    lines += ["}", "", "/** Index of channel name in a pose (generated). */"]
+    lines += [f"    clips{i + 1}();" for i in range(len(chunks))]
+    lines.append("}")
+    for i, body in enumerate(chunks):
+        lines += ["", f"function clips{i + 1} {{"] + body + ["}"]
+    lines += ["", "/** Index of channel name in a pose (generated). */"]
     lines += ["function chan(name: str): num {",
               "    line c = {" + ", ".join(f"{c}: {i + 1}" for i, c in enumerate(CHANNELS)) + "};",
               "    return line c[name] as num;", "}", ""]
-    (ROOT / "tc/anim_data.tc").write_text("\n".join(lines) + "\n")
+    text = "\n".join(lines) + "\n"
+    text = text.replace("@VER@", hashlib.sha1(text.encode()).hexdigest()[:10])
+    (ROOT / "tc/anim_data.tc").write_text(text)
     out = ROOT / "tools/viewer/anim_data.json"
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps({"channels": CHANNELS, "rest": [REST[c] for c in CHANNELS], "clips": data}))
+    out.write_text(json.dumps({"channels": CHANNELS, "rest": [REST[c] for c in CHANNELS], "upper": UPPER, "clips": data}))
     print(f"anim: {len(CLIPS)} clips, {len(CHANNELS)} channels")
 
 

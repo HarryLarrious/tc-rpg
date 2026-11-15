@@ -46,7 +46,8 @@
   <label>Playback <input type="range" id="rate" min="0.05" max="2" step="0.05" value="1"></label>
   <label>Time <input type="range" id="time" min="0" max="1" step="0.001" value="0"></label>
   <label>Clip ticks <input type="text" id="ticks" value="14"></label>
-  <div class="row"><button id="play">Pause</button><button id="step">Step 1 tick</button><label style="margin:0"><input type="checkbox" id="ghost"> Arc</label><label style="margin:0"><input type="checkbox" id="strip"> Strip</label><label style="margin:0"><input type="checkbox" id="joints"> Joints</label></div>
+  <label>Strip view <select id="stripView"><option value="side">side</option><option value="front">front</option><option value="q">3/4</option></select></label>
+  <div class="row"><button id="play">Pause</button><button id="step">Step 1 tick</button><label style="margin:0"><input type="checkbox" id="ghost"> Arc</label><label style="margin:0"><input type="checkbox" id="strip"> Strip</label><label style="margin:0"><input type="checkbox" id="joints"> Joints</label><label style="margin:0" title="Locomotion mode: off the ground"><input type="checkbox" id="air"> Air</label></div>
 
   <h2>Character</h2>
   <label>Build <select id="build"></select></label>

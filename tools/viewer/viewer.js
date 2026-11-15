@@ -4,7 +4,7 @@
 // and the clips from anim_data.json, so it shows what the generators wrote.
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-import { PARTS, PART_ITEM, rigPose, clipPose, toDict, locoMix, addStance, blendAction, actionWeight, phaseRate } from "./rig.js";
+import { PARTS, PART_ITEM, rigPose, clipPose, toDict, locoMix, addClip, blendAction, actionWeight, phaseRate } from "./rig.js";
 
 const ASSETS = "../../pack/assets/";
 const WEAPONS = ["sword", "longsword", "greatsword", "dagger", "axe", "greataxe", "mace", "warhammer", "spear", "halberd",
@@ -178,7 +178,7 @@ function stripBuild() {
   for (let i = 0; i < STRIP_N; i++) {
     const root = new THREE.Group();
     root.position.set((i - (STRIP_N - 1) / 2) * 1.35, 0, 0);
-    root.rotation.y = Math.PI / 2;
+    root.rotation.y = { side: Math.PI / 2, front: 0, q: Math.PI / 5 }[$("stripView").value] ?? Math.PI / 2;
     root.userData.parts = {};
     for (const p of PARTS) {
       const g = partGroups[p].clone();
@@ -215,7 +215,7 @@ async function loadData() {
   matCache.clear();
   rigData = await getJson("rig_data.json");
   anim = await getJson("anim_data.json");
-  anim.upper = anim.channels.map(c => /^(t_|h_|ua_|el_|m_|o_)/.test(c));
+  anim.upperMask = anim.channels.map(c => anim.upper.includes(c));
   fill("build", Object.keys(rigData.builds));
   fill("hairStyle", rigData.hairs, "none");
   fill("ears", rigData.ears);
@@ -233,7 +233,7 @@ async function loadData() {
 const HIDES_HAIR = ["chain", "scale", "plate", "bone", "ranger"];
 function partStrings(item) {
   const b = $("build").value;
-  const slot = { head: "head", torso: "torso", uarm: "arm", farm: "arm", thigh: "leg", shin: "leg" }[item];
+  const slot = item;
   const armor = $("a_" + slot).value;
   const s = [b, armor];
   if (item === "head") {
@@ -282,19 +282,19 @@ async function rebuild() {
 
 // ------------------------------------------------------------- hash state
 
-const KEYS = ["mode", "clip", "stance", "speed", "rate", "time", "ticks", "build", "hairStyle", "ears", "beard", "tail", "scale",
+const KEYS = ["stripView", "mode", "clip", "stance", "speed", "rate", "time", "ticks", "build", "hairStyle", "ears", "beard", "tail", "scale",
   "skin", "hair", "eye", "cloth", "pants", "horn", "a_head", "a_torso", "a_arm", "a_leg", "am", "at", "main", "off", "variant", "single"];
 function readHash() {
   const q = new URLSearchParams(location.hash.slice(1));
   for (const k of KEYS) if (q.has(k)) $(k).value = q.get(k);
-  for (const k of ["joints", "ghost", "strip"]) if (q.has(k)) $(k).checked = q.get(k) === "1";
+  for (const k of ["joints", "ghost", "strip", "air"]) if (q.has(k)) $(k).checked = q.get(k) === "1";
   if (q.get("paused") === "1") setPlaying(false);
   if (q.has("cam")) setCam(q.get("cam"));
 }
 function writeHash() {
   const q = new URLSearchParams();
   for (const k of KEYS) if ($(k).value !== "") q.set(k, $(k).value);
-  for (const k of ["joints", "ghost", "strip"]) if ($(k).checked) q.set(k, "1");
+  for (const k of ["joints", "ghost", "strip", "air"]) if ($(k).checked) q.set(k, "1");
   if (!playing) q.set("paused", "1");
   history.replaceState(null, "", "#" + q.toString());
 }
@@ -311,7 +311,10 @@ $("step").onclick = () => { setPlaying(false); advance(1); writeHash(); };
 $("time").oninput = () => { clipT = +$("time").value; };
 function setCam(kind) {
   const d = 4.6;
-  const pos = { front: [0, 1.1, d], side: [d, 1.1, 0], q: [2.4, 1.7, 3.9], strip: [0, 1.2, 17.5] }[kind] || [2.4, 1.7, 3.9];
+  // The strip: far enough back for the whole row to fit the view's width.
+  const half = Math.tan(camera.fov * Math.PI / 360) * camera.aspect;
+  const far = (STRIP_N * 1.35 / 2 + 0.3) / half;
+  const pos = { front: [0, 1.1, d], side: [d, 1.1, 0], q: [2.4, 1.7, 3.9], strip: [0, 1.2, far] }[kind] || [2.4, 1.7, 3.9];
   camera.position.set(...pos);
   controls.target.set(0, 0.95, 0);
   controls.update();
@@ -330,8 +333,9 @@ for (const k of KEYS) {
     writeHash();
   });
 }
-for (const k of ["joints", "ghost", "strip"]) $(k).addEventListener("change", writeHash);
+for (const k of ["joints", "ghost", "strip", "air"]) $(k).addEventListener("change", writeHash);
 $("strip").addEventListener("change", () => { stripBuild(); setCam($("strip").checked ? "strip" : "q"); });
+$("stripView").addEventListener("change", stripBuild);
 
 /** Advances the animation by n game ticks. */
 function advance(n) {
@@ -351,17 +355,19 @@ function advance(n) {
 function currentPose(t = clipT) {
   const mode = $("mode").value;
   if (mode === "rest") return anim.rest.slice();
-  let pose = locoMix(anim, mode === "loco" ? +$("speed").value : 0, true, phase, ticks);
-  pose = addStance(anim, pose, $("stance").value);
+  let pose = locoMix(anim, mode === "loco" ? +$("speed").value : 0, mode !== "loco" || !$("air").checked, phase, ticks);
+  pose = addClip(anim, pose, $("stance").value);
   if (mode === "clip") {
     const name = $("clip").value, c = anim.clips[name];
-    pose = blendAction(anim, pose, name, Math.min(1, t), actionWeight(Math.min(1, t), c.loop, name === "death"));
+    const tt = Math.min(1, t);
+    // Landings add over locomotion in the game (tc/core.tc).
+    pose = name === "land" ? addClip(anim, pose, name, tt) : blendAction(anim, pose, name, tt, actionWeight(tt, c.loop, name === "death"));
   }
   return pose;
 }
 
 /** Left-hand IK offset along the weapon for two-handed weapons (px), or
- * null (mirrors rigIkOffset in tc/anim.tc). */
+ * null (mirrors rigIkOffset in tc/rig.tc). */
 function ikOffset() {
   const w = $("main").value;
   if (["greatsword", "greataxe", "warhammer", "scythe"].includes(w)) return -3.6;

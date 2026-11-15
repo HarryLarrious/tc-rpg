@@ -11,6 +11,10 @@ declare saved spawnPoint: vec;
 declare global dbgOn: num;
 /** Loop counter used to give each player loop an id. */
 declare global loopSeq: num;
+/** Per player: ticks spent off the ground, and the tick of the last
+ * landing (for the landing squash). */
+declare global pAirT: dict[num];
+declare global pLandT: dict[num];
 
 playerevent join {
     line uuid = default.uuid;
@@ -116,7 +120,20 @@ function playerTick {
         designerFace(line uuid, line camYaw);
     }
     line yaw = global pYaw[line uuid];
-    line pose = locoMix(line speed, global pGround[line uuid], line ph, global tick);
+    line g = global pGround[line uuid];
+    if (line g == 0) {
+        global pAirT[line uuid] = global pAirT[line uuid] + 1;
+    } else {
+        if (global pAirT[line uuid] >= 4) {
+            global pLandT[line uuid] = global tick;
+        }
+        global pAirT[line uuid] = 0;
+    }
+    line pose = locoMix(line speed, line g, line ph, global tick);
+    line lt = global tick - global pLandT[line uuid];
+    if (line lt < 7 && global pAct[line uuid] == "") {
+        line pose = addClip(line pose, "land", line lt / 7, 1);
+    }
     line pose = actionPose(line uuid, line pose);
     if (global pAct[line uuid] != "dodge" && global pAct[line uuid] != "dead") {
         line pose = headLook(line pose, wrapDeg(line camYaw - line yaw), line camPitch);

@@ -44,10 +44,10 @@ function clipPose(name: str, t: num): list[num] {
         line j = num.min(line j, line n - 1);
     }
     line d = animSamples(name);
-    line a = line i * 29;
-    line b = line j * 29;
+    line a = line i * 28;
+    line b = line j * 28;
     line out: list[num] = [];
-    repeat (line c to 29) {
+    repeat (line c to 28) {
         line va = line d[line a + line c];
         line out.append(line va + (line d[line b + line c] - line va) * line f);
     }
@@ -69,7 +69,7 @@ function phaseRate(speed: num): num {
  * the air pose off the ground. phase: walk phase (degrees), t: ticks. */
 function locoMix(speed: num, grounded: num, phase: num, t: num): list[num] {
     if (grounded == 0) {
-        return clipPose("air", 0);
+        return clipPose("air", t / 14);
     }
     line idle = clipPose("idle", t / 60);
     if (speed < 0.01) {
@@ -81,14 +81,26 @@ function locoMix(speed: num, grounded: num, phase: num, t: num): list[num] {
     line out: list[num] = [];
     if (line wRun > 0) {
         line run = clipPose("run", phase / 360);
-        repeat (line c to 29) {
+        repeat (line c to 28) {
             line m = mix(line idle[line c], line walk[line c], line wWalk);
             line out.append(mix(line m, line run[line c], line wRun));
         }
     } else {
-        repeat (line c to 29) {
+        repeat (line c to 28) {
             line out.append(mix(line idle[line c], line walk[line c], line wWalk));
         }
+    }
+    return line out;
+}
+
+/** Adds clip `name` at time t (its offsets from the rest pose) to pose
+ * with weight w: landings and the like. */
+function addClip(pose: list[num], name: str, t: num, w: num): list[num] {
+    line act = clipPose(name, t);
+    line rest = poseZero();
+    line out = pose;
+    repeat (line c to 28) {
+        line out[line c] = pose[line c] + (line act[line c] - line rest[line c]) * w;
     }
     return line out;
 }
@@ -102,14 +114,14 @@ function addStance(pose: list[num], name: str): list[num] {
         line st = clipPose(name, 0);
         line rest = poseZero();
         line dl: list[num] = [];
-        repeat (line c to 29) {
+        repeat (line c to 28) {
             line dl.append(line st[line c] - line rest[line c]);
         }
         global stanceDelta[name] = line dl;
     }
     line dl = global stanceDelta[name] as list[num];
     line out = pose;
-    repeat (line c to 29) {
+    repeat (line c to 28) {
         if (line dl[line c] != 0) {
             line out[line c] = pose[line c] + line dl[line c];
         }
@@ -118,15 +130,15 @@ function addStance(pose: list[num], name: str): list[num] {
 }
 
 /** Blends action clip `name` at time t over pose with weight w. Clips
- * marked upper leave the legs and the root to the pose. */
+ * marked upper leave the legs, the root and the squash to the pose. */
 function blendAction(pose: list[num], name: str, t: num, w: num): list[num] {
     line act = clipPose(name, t);
     line upper = (global animMeta[name] as list[num])[4];
     line out = pose;
-    repeat (line c to 29) {
-        if (line upper == 0 || (line c >= 5 && line c <= 17) || line c >= 24) {
+    repeat (line c to 28) {
+        if (line upper == 0 || (line c >= 7 && line c <= 18) || line c >= 23) {
             line d = line act[line c] - pose[line c];
-            if (line c <= 2) {
+            if (line c <= 3) {
                 // Root turns the shorter way round (a roll's 360 is 0).
                 line d = (line d + 900) % 360 - 180;
             }
@@ -149,8 +161,8 @@ function actionWeight(t: num, hold: num): num {
  * sense, relative to the body) and lookPitch (positive looks down). */
 function headLook(pose: list[num], lookYaw: num, lookPitch: num): list[num] {
     line out = pose;
-    line out[9] = pose[9] - num.clamp(lookYaw, -65, 65);
-    line out[8] = pose[8] + num.clamp(lookPitch, -40, 45) - pose[5] * 0.6;
+    line out[11] = pose[11] - num.clamp(lookYaw, -65, 65);
+    line out[10] = pose[10] + num.clamp(lookPitch, -40, 45) - pose[7] * 0.6;
     return line out;
 }
 
