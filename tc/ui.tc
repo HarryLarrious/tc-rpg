@@ -195,6 +195,7 @@ function journalOpen {
     dialog.addButton(line d, s"<aqua>Quests", s"Your contracts", "j_quests", 150);
     dialog.addButton(line d, s"<gray>Camera", s"Camera distance", "j_cam", 150);
     dialog.addButton(line d, s"<gray>Appearance", s"The mirror (costs 50 gold after the first time)", "j_design", 150);
+    dialog.addButton(line d, s"<white>Help", s"Controls and tips", "j_help", 150);
     default.openDialog(line d);
 }
 
@@ -288,6 +289,18 @@ function loomOpen(phrase: str, msg: txt) {
             line info = spellInfo(line sp);
             dialog.addBodyText(line d, s"<#E080FF><b>%var(name)</b>\n<gray>%var(info)");
         }
+    }
+    // The words you know, by class, to build phrases from.
+    line known = pdGet(uuid, "words") as list[str];
+    for (line cls of ["elem", "form", "verb", "mod"]) {
+        line title = {elem: "Elements", form: "Forms", verb: "Verbs", mod: "Modifiers"}[line cls] as str;
+        line s = "";
+        for (line w of line known) {
+            if (wordData(line w)[1] == line cls) {
+                line s = "%var(s) %var(w)";
+            }
+        }
+        dialog.addBodyText(line d, s"<#E080FF>%var(title):<gray>%var(s)", 300);
     }
     dialog.addTextInput(line d, "phrase", s"Phrase (e.g. ignis sagitta celer)", phrase, 300, 80);
     dialog.addButton(line d, s"<yellow>Preview", s"See what the phrase does", "l_prev", 100);
@@ -383,6 +396,8 @@ playerevent clickDialogButton {
         questsPage();
     } else if (line id == "j_cam") {
         camPage();
+    } else if (line id == "j_help") {
+        helpPage();
     } else if (line id == "j_design") {
         designerOpen();
     } else if (line id == "cam_set") {
@@ -544,4 +559,16 @@ function drinkPotion(uuid: str, it: item) {
         global pBuffUntil[uuid] = now() + 600;
     }
     default.playSound(snd("Drink", 1, 1));
+}
+
+/** Controls and tips. */
+function helpPage {
+    line d = dialog.create("help", s"<white><b>How to play", type="Multi Action");
+    dialog.addBodyText(line d, s"<yellow>WASD</yellow> move, mouse looks. <yellow>Space</yellow> jump, <yellow>Ctrl</yellow> sprint, <yellow>Shift</yellow> dodge roll (you can't be hit mid-roll).", 320);
+    dialog.addBodyText(line d, s"<yellow>Left click</yellow> attacks; keep clicking for a three-hit combo. <yellow>Right click</yellow> is a heavy attack. Bows: left click shoots, right click draws a strong shot. Staves and wands shoot arcane bolts.", 320);
+    dialog.addBodyText(line d, s"<yellow>2-8</yellow> use the spells and arts in your slots. <yellow>Q</yellow> locks on to an enemy. <yellow>F</yellow> talks to people. <yellow>9</yellow> opens this Journal.", 320);
+    dialog.addBodyText(line d, s"<#E080FF>Magic</#E080FF>: spells are phrases of Latin words. Learn words at a library, then inscribe phrases into your wand or staff at the Spell Loom, or just say a phrase in chat while holding a focus (it costs more). Wands hold one spell per rarity, up to six. The blacksmith can raise a focus's rarity.", 320);
+    dialog.addBodyText(line d, s"<aqua>Getting started</aqua>: visit Lord Aldric Valen in the keep, take contracts at the Adventurers' Guild, and sell loot to the smith and armorer. Monsters grow stronger the further you go from town.", 320);
+    dialog.addButton(line d, s"Back", s"Journal", "j_back", 100);
+    default.openDialog(line d);
 }

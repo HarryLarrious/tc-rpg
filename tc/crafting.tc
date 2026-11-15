@@ -1,0 +1,146 @@
+// Crafting: monsters drop materials (ore, hide, essence) and the smith and
+// armorer forge chosen gear from them.
+
+/** A stack of n of material t (ore, hide, essence). */
+function makeMat(t: str, n: num): item {
+    if (t == "hide") {
+        return item("rabbit_hide").setName(s"<!i><#C8A070>Hide").setLore([s"<gray>Tanned skins. Armorers make leather, ranger and bone armor from it."]).setTag("k", "mat").setTag("t", "hide").setStackSize(n);
+    }
+    if (t == "essence") {
+        return item("amethyst_shard").setName(s"<!i><#E080FF>Arcane Essence").setLore([s"<gray>Residue of magic. Needed for wands, staves and robes."]).setTag("k", "mat").setTag("t", "essence").setStackSize(n);
+    }
+    return item("raw_iron").setName(s"<!i><#C8C8C8>Ore").setLore([s"<gray>Metal for weapons and metal armor."]).setTag("k", "mat").setTag("t", "ore").setStackSize(n);
+}
+
+/** Material dropped by monster type t. */
+function monsterMat(t: str): str {
+    if (t == "wolf" || t == "direwolf" || t == "bear" || t == "spider" || t == "broodmother") {
+        return "hide";
+    }
+    if (t == "witch" || t == "ghoul" || t == "skeleton" || t == "archer" || t == "cryptlord") {
+        return "essence";
+    }
+    return "ore";
+}
+
+/** How much of material t player (default) carries in the bag. */
+function matCount(t: str): num {
+    line n = 0;
+    for (line it of default.upperInventoryItems) {
+        if ((line it as item).getTag("k") == "mat" && (line it as item).getTag("t") == t) {
+            line n += (line it as item).getStackSize();
+        }
+    }
+    return line n;
+}
+
+/** Takes n of material t from the bag of player (default). */
+function matTake(t: str, n: num) {
+    line left = n;
+    line inv = default.upperInventoryItems;
+    repeat (line i to line inv.len()) {
+        line it = line inv[line i] as item;
+        if (line left > 0 && line it.getTag("k") == "mat" && line it.getTag("t") == t) {
+            line have = line it.getStackSize();
+            line take = num.min(line have, line left);
+            line left -= line take;
+            if (line take == line have) {
+                default.setItemInSlot(item("air"), line i + 9);
+            } else {
+                default.setItemInSlot(line it.setStackSize(line have - line take), line i + 9);
+            }
+        }
+    }
+}
+
+/** Material and amount to forge weapon or armor kind at tier m. */
+function recipe(kind: str, m: num): list {
+    line mat = "ore";
+    if (kind == "wand" || kind == "staff" || kind == "robe") {
+        line mat = "essence";
+    } else if (kind == "leather" || kind == "ranger" || kind == "bone") {
+        line mat = "hide";
+    }
+    return [line mat, 2 + m * 2, num.round(15 * m ** 1.5)];
+}
+
+/** The forge: pick a weapon type or armor set, a slot and a tier. */
+function forgePage(armor: num, msg: txt) {
+    line uuid = default.uuid;
+    line lvl = pdGet(uuid, "lvl") as num;
+    line maxTier = num.clamp(num.floor(lvl / 5) + 2, 1, 9);
+    line d = dialog.create("forge", s"<gold><b>Forge", type="Multi Action");
+    line ore = matCount("ore");
+    line hide = matCount("hide");
+    line ess = matCount("essence");
+    line gold = pdGet(uuid, "gold");
+    dialog.addBodyText(line d, s"<gray>You carry <white>%var(ore)</white> ore, <white>%var(hide)</white> hide, <white>%var(ess)</white> essence and <gold>%var(gold)</gold> gold. Tier n needs 2+2n of the material and some gold. Forged gear comes out Uncommon to Epic.", 320);
+    dialog.addBodyText(line d, msg, 320);
+    line tl: list[txt] = [];
+    line ti: list[str] = [];
+    repeat (line t to line maxTier) {
+        line mn = matData(line t)[1] as str;
+        line ti.append("%var(t)");
+        line tl.append(s"%var(t) %var(mn)");
+    }
+    if (armor == 1) {
+        line sets: list[str] = ["leather", "chain", "scale", "plate", "robe", "ranger", "noble", "bone"];
+        line sl: list[txt] = [];
+        for (line st of line sets) {
+            line sl.append(s"%var(st)");
+        }
+        dialog.addOptionInput(line d, "set", s"Set", 220, "leather", line sets, line sl);
+        dialog.addOptionInput(line d, "slot", s"Piece", 220, "torso", ["head", "torso", "arm", "leg"], [s"Helm", s"Body", s"Bracers", s"Greaves"]);
+    } else {
+        line types = weaponTypes();
+        line wl: list[txt] = [];
+        for (line wt of line types) {
+            line wl.append(s"%var(wt)");
+        }
+        dialog.addOptionInput(line d, "type", s"Weapon", 220, "sword", line types, line wl);
+    }
+    dialog.addOptionInput(line d, "tier", s"Tier", 220, "1", line ti, line tl);
+    if (armor == 1) {
+        dialog.addButton(line d, s"<gold>Forge it", s"Uses the materials", "f_armor", 120);
+    } else {
+        dialog.addButton(line d, s"<gold>Forge it", s"Uses the materials", "f_weapon", 120);
+    }
+    default.openDialog(line d);
+}
+
+/** Forges what the forge dialog asks for. */
+function forgeDo(armor: num) {
+    line uuid = default.uuid;
+    line m = num.parse(game.getDialogText("tier"));
+    line kind = "";
+    if (armor == 1) {
+        line kind = game.getDialogText("set");
+    } else {
+        line kind = game.getDialogText("type");
+    }
+    line rc = recipe(line kind, m);
+    line mat = line rc[1] as str;
+    line need = line rc[2] as num;
+    line cost = num.round((line rc[3] as num) * raceMul(playerRace(uuid), "smith"));
+    if (matCount(line mat) < line need) {
+        forgePage(armor, s"<red>You need %var(need) %var(mat).");
+        return;
+    }
+    if ((pdGet(uuid, "gold") as num) < line cost) {
+        forgePage(armor, s"<red>The work costs %var(cost) gold.");
+        return;
+    }
+    matTake(line mat, line need);
+    giveGold(uuid, 0 - line cost);
+    line r = 2 + num.floor(num.randomd(0, 2.99));
+    line it = item("air");
+    if (armor == 1) {
+        line it = makeArmor(game.getDialogText("slot"), line kind, m, line r, now() + num.randomd(0, 9999));
+    } else {
+        line it = makeWeapon(line kind, m, line r, now() + num.randomd(0, 9999));
+    }
+    default.giveItems(line it);
+    default.playSound(snd("Anvil Use", 1, 1));
+    line n = line it.getName();
+    forgePage(armor, s"<green>Forged: </green>%var(n)");
+}

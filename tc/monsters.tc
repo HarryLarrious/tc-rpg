@@ -282,6 +282,9 @@ function enemyDie(id: str, by: str) {
         if (num.randomd(0, 1) < 0.08) {
             giveLoot(by, makeScroll(randomWord(lvl)));
         }
+        if (num.randomd(0, 1) < 0.55) {
+            giveLoot(by, makeMat(monsterMat(line t), 1 + num.floor(lvl / 6) + num.floor(num.randomd(0, 2))));
+        }
         if (num.randomd(0, 1) < 0.12) {
             giveLoot(by, makePotion(["hp", "mana", "sta"][1 + num.floor(num.randomd(0, 2.99))] as str, 1));
         }

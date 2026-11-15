@@ -99,9 +99,11 @@ function talkTo(id: str) {
     dialog.setColumnCount(line d, 2);
     if (role == "armorer") {
         dialog.addButton(line d, s"<yellow>Trade", s"Buy and sell armor", "t_shop_armor", 150);
+        dialog.addButton(line d, s"<gold>Forge armor", s"Make armor from ore and hide", "t_forge_armor", 150);
     } else if (role == "smith") {
         dialog.addButton(line d, s"<yellow>Trade", s"Buy and sell weapons", "t_shop_weapons", 150);
         dialog.addButton(line d, s"<yellow>Repair gear", s"Mend all your equipment", "t_repair", 150);
+        dialog.addButton(line d, s"<gold>Forge weapon", s"Make a weapon from materials", "t_forge_weapon", 150);
         dialog.addButton(line d, s"<#B05CFF>Improve weapon", s"Raise your main weapon's rarity", "t_upgrade_main", 150);
         dialog.addButton(line d, s"<#B05CFF>Improve focus", s"Raise your off-hand item's rarity", "t_upgrade_off", 150);
     } else if (role == "librarian") {
@@ -140,6 +142,14 @@ function dialogRoute(id: str) {
         default.sendMessage(s"<gray>\"%var(r)\"");
     } else if (id.startsWith("t_shop_")) {
         shopOpen(id.replace("t_shop_", ""));
+    } else if (id == "t_forge_weapon") {
+        forgePage(0, s"");
+    } else if (id == "t_forge_armor") {
+        forgePage(1, s"");
+    } else if (id == "f_weapon") {
+        forgeDo(0);
+    } else if (id == "f_armor") {
+        forgeDo(1);
     } else if (id == "t_repair") {
         smithRepair(uuid);
     } else if (id.startsWith("t_upgrade_")) {
