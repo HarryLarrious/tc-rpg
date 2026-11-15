@@ -84,7 +84,13 @@ process playerLoop {
     line me = global pLoopId[line uuid];
     while (global pIn[line uuid] == 1 && global pLoopId[line uuid] == line me) {
         if (hasBody(line uuid) == 1) {
-            playerTick();
+            if (global rigParts.hasKeys(line uuid)) {
+                playerTick();
+            } else if (global tick % 20 == 0) {
+                // The rig failed to spawn: try again where the body is.
+                line f = bodyFeet(line uuid);
+                rigSpawn(line uuid, global pBody[line uuid], loc(line f.x, line f.y, line f.z), playerApp(line uuid));
+            }
         }
         wait;
     }
@@ -167,7 +173,13 @@ playerevent command {
         line p = bodyFeet(line uuid);
         default.sendMessage(s"<gray>Body at %var(p)");
     } else if (line cmd == "tp") {
-        bodyTeleport(loc(argNum(line words, 2, 500), argNum(line words, 3, 60), argNum(line words, 4, 500)));
+        line tx = argNum(line words, 2, 500);
+        line tz = argNum(line words, 4, 500);
+        line ty = argNum(line words, 3, 0);
+        if (line ty == 0) {
+            line ty = groundY(line tx, line tz) + 1;
+        }
+        bodyTeleport(loc(line tx, line ty, line tz));
     } else if (line cmd == "ride") {
         global rigRideY = argNum(line words, 2, 1.95);
     } else if (line cmd == "eye") {

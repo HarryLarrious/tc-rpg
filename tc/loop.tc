@@ -7,7 +7,16 @@ declare global gBeat: num;
 
 /** Starts the game loop unless one is running. */
 function ensureGameLoop {
-    if (global gLoopId == 0 || game.ticksSinceStartup - global gBeat > 10) {
+    if (global gLoopId == 0) {
+        // First run since the plot started: entities left over from before
+        // (our state about them is gone) are cleared; the loop puts the
+        // town back.
+        global gLoopId = -1;
+        select allEntities;
+        selectedEntity.remove();
+        select reset;
+        start gameLoop;
+    } else if (game.ticksSinceStartup - global gBeat > 10) {
         start gameLoop;
     }
 }
@@ -15,11 +24,6 @@ function ensureGameLoop {
 process gameLoop {
     global gLoopId = game.ticksSinceStartup + 1;
     line me = global gLoopId;
-    // Entities left over from before a restart: our state about them is
-    // gone, so clear them all and put the town back.
-    select allEntities;
-    selectedEntity.remove();
-    select reset;
     planLoad();
     if (saved wAuto == 1 && global wRun == 0) {
         start worldBuilder;

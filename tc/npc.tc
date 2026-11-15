@@ -24,6 +24,7 @@ declare global nPhase: dict[num];
 declare global nStuck: dict[num];
 declare global nTalk: dict[str];
 declare global nInside: dict[num];
+declare global nApp: dict[dict];
 /** Street graph: node key -> vec, and node key -> neighbour keys. */
 declare global gNode: dict[vec];
 declare global gAdj: dict[list];
@@ -386,6 +387,7 @@ function npcSpawn(id: str, role: str, work: num, home: num) {
     lastEntity.setMovementAttribute(1.05, attr="Step height");
     lastEntity.setMiscellaneousAttribute(0, attr="Name tag distance");
     lastEntity.setEquipmentItem(item("paper").setModel("rpg:empty"), slot="Head");
+    global nApp[id] = line app;
     rigSpawn(id, line body, loc(spawnAt.x, spawnAt.y, spawnAt.z), line app);
     global rigInterp[id] = 4;
     // Name label above the head.
@@ -438,7 +440,10 @@ function npcCommand(words: list) {
     } else {
         line n = global nList.len();
         line h = num.round(hourNow() * 10) / 10;
-        default.sendMessage(s"<gray>%var(n) townsfolk. Hour %var(h).");
+        line e = global eList.len();
+        line pr = global projs.len();
+        line cpu = game.cpuUsage;
+        default.sendMessage(s"<gray>%var(n) townsfolk, %var(e) monsters, %var(pr) projectiles. Hour %var(h). CPU %var(cpu)");
     }
 }
 
@@ -600,6 +605,10 @@ function npcStep(id: str) {
     if (line near > 80) {
         return;
     }
+    if (!global rigParts.hasKeys(id) && line near < 60 && (global tick + num.parse(id.replace("n", ""))) % 40 == 0) {
+        rigSpawn(id, global nBody[id], loc(pos.x, pos.y, pos.z), global nApp[id]);
+        global rigInterp[id] = 4;
+    }
     select entitiesByName(global nBody[id]);
     line l = selectedEntity.location;
     select reset;
@@ -683,7 +692,7 @@ function npcStep(id: str) {
     selectedEntity.setVelocity(vec(line v.x, line vy, line v.z));
     select reset;
     // Animate only when someone can see it, idle ones only up close.
-    if (line near < 48 && (line v.len() > 0.01 || line near < 16)) {
+    if (line near < 48 && (line v.len() > 0.01 || line near < 16) && global rigParts.hasKeys(id)) {
         line sp = line v.len();
         line ph = (global nPhase[id] + line sp * 230 * 4) % 360;
         global nPhase[id] = line ph;

@@ -115,6 +115,20 @@ function rigSpawn(rid: str, body: str, at: loc, app: dict) {
     line ids.append(lastEntity.uuid);
     game.spawnItemDisplay(at, rigHeldItem(app["off"] as str));
     line ids.append(lastEntity.uuid);
+    // A display that failed to spawn (unloaded chunk) leaves no UUID: give
+    // up on the whole rig so nothing draws with a missing part.
+    line ok = 1;
+    for (line id of line ids) {
+        if ("%var(id)".len() < 30) {
+            line ok = 0;
+        }
+    }
+    if (line ok == 0) {
+        select entitiesByName(line ids);
+        selectedEntity.remove();
+        select reset;
+        return;
+    }
     select entitiesByName(line ids);
     selectedEntity.ride(body);
     selectedEntity.setDisplayCullingSize(3, 3);
@@ -202,6 +216,11 @@ function rigSetMatrix(id: str, m: list[num], interp: num) {
  * the feet (blocks). */
 function rigRender(rid: str, yaw: num, pose: list[num]): vec {
     line ids = global rigParts[rid] as list[str];
+    if (line ids.len() != 8) {
+        default.sendMessage(s"<red>RIGBAD %var(rid) %var(ids)");
+        global rigParts.remove(rid);
+        return vec(0, 0, 0);
+    }
     line app = global rigApp[rid];
     line rb = global rigBuild[line app["build"] as str] as list[num];
     line hipY = line rb[1];

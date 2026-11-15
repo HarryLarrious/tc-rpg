@@ -171,10 +171,17 @@ playerevent dropItem {
     }
 }
 
-lscancel playerevent takeDamage {
+playerevent takeDamage {
+    // Health is the game's own; the real (camera) player never takes damage.
+    event.cancel();
 }
 
-lscancel playerevent exhaustion {
+playerevent exhaustion {
+    event.cancel();
+}
+
+playerevent airChange {
+    event.cancel();
 }
 
 /** A click: kind 1 light, 2 heavy. Starts an attack or queues it. */
@@ -748,8 +755,8 @@ function respawnPlayer(uuid: str) {
     select playersByName(uuid);
     selected.sendMessage(s"<gray>The priests tended your wounds. <gold>-%var(lost) gold");
     select reset;
-    select entitiesByName(global pBody[uuid]);
-    selectedEntity.teleport(at);
+    select playersByName(uuid);
+    bodyTeleport(at);
     select reset;
 }
 

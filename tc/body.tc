@@ -79,7 +79,7 @@ function bodySpawn(at: loc) {
     }
     global pFeet[line uuid] = vec(at.x, at.y, at.z);
     rigSpawn(line uuid, line body, at, playerApp(line uuid));
-    default.givePotionEffect(pot("Invisibility", 1, 1000000), showIcon="False", particles="None");
+    default.givePotionEffect([pot("Invisibility", 1, 1000000), pot("Resistance", 255, 1000000), pot("Water Breathing", 1, 1000000), pot("Fire Resistance", 1, 1000000), pot("Saturation", 1, 1000000)], showIcon="False", particles="None");
     default.rideEntity(line boom);
     select !playersByName(line uuid);
     selected.setEntityHidden([line uuid], hidden="Enable");
@@ -124,9 +124,22 @@ function bodyFeet(uuid: str): vec {
 /** Teleports the body of the player (default) to `at`. */
 function bodyTeleport(at: loc) {
     line uuid = default.uuid;
-    select entitiesByName(global pBody[line uuid]);
-    selectedEntity.teleport(at);
-    select reset;
+    line from0 = bodyFeet(line uuid);
+    if ((vec(at.x, at.y, at.z) - line from0).len() < 40) {
+        select entitiesByName(global pBody[line uuid]);
+        selectedEntity.teleport(at);
+        select reset;
+    } else {
+        // Far: carry the player there, let the chunks load, then build the
+        // body, boom and rig again on the spot.
+        global pFree[line uuid] = 1;
+        bodyRemove(line uuid);
+        default.rideEntity();
+        default.teleport(loc(at.x, at.y + 1, at.z));
+        wait(5);
+        bodySpawn(at);
+        global pFree[line uuid] = 0;
+    }
     global pFeet[line uuid] = vec(at.x, at.y, at.z);
     global pVel[line uuid] = vec(0, 0, 0);
 }
@@ -251,9 +264,12 @@ playerevent movementKeyChange {
     }
 }
 
+/** Per player: 1 while the game itself takes them off the boom. */
+declare global pFree: dict[num];
+
 playerevent dismount {
     // Shift would get off the boom: it is the dodge key instead.
-    if (hasBody(default.uuid) == 1) {
+    if (hasBody(default.uuid) == 1 && global pFree[default.uuid] != 1) {
         event.cancel();
     }
 }
