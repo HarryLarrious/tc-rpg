@@ -27,7 +27,7 @@ declare saved wLabels: list[str];
 
 /** Saves the plan. */
 function planSave {
-    saved wSaved = {v: 3, S: global wS, cx: global wCx, cz: global wCz, R: global wR, rot: global wRot,
+    saved wSaved = {v: 4, vil: global wVil, S: global wS, cx: global wCx, cz: global wCz, R: global wR, rot: global wRot,
         roads: global wRoads, wall: global wWall, gates: global wGates, blds: global wBlds, pois: global wPois};
 }
 
@@ -38,7 +38,8 @@ function planLoad {
         return;
     }
     line sv = saved wSaved;
-    if (line sv.hasKeys("v") && line sv["v"] == 3 && line sv["S"] == game.plotSize) {
+    if (line sv.hasKeys("v") && line sv["v"] == 4 && line sv["S"] == game.plotSize) {
+        global wVil = line sv["vil"] as list[num];
         global wS = line sv["S"] as num;
         global wCx = line sv["cx"] as num;
         global wCz = line sv["cz"] as num;
@@ -184,6 +185,7 @@ function buildStep(name: str, step: num): num {
     }
     if (name == "plaza") {
         buildPlaza();
+        buildVillageSquare();
         return 0;
     }
     if (name == "wall") {
@@ -322,6 +324,30 @@ function buildPlaza {
     for (line c of [vec(cx - 13, 0, cz - 13), vec(cx + 13, 0, cz - 13), vec(cx - 13, 0, cz + 13), vec(cx + 13, 0, cz + 13)]) {
         lampPost(line c.x, G + 1, line c.z);
     }
+}
+
+/** The village square: paving, a covered well and a notice post. */
+function buildVillageSquare {
+    if (global wVil.len() == 0) {
+        return;
+    }
+    line vx = num.round(global wVil[1]);
+    line vz = num.round(global wVil[2]);
+    line G = townY();
+    fill("cobblestone", vx - 7, G, vz - 7, vx + 7, G, vz + 7);
+    fill("air", vx - 7, G + 1, vz - 7, vx + 7, G + 6, vz + 7);
+    fill("stone_bricks", vx - 4, G, vz - 4, vx + 4, G, vz + 4);
+    // The well.
+    fill("stone_bricks", vx - 1, G - 4, vz - 1, vx + 1, G + 1, vz + 1);
+    fill("water_bucket", vx, G - 3, vz, vx, G, vz);
+    fill("air", vx, G + 1, vz, vx, G + 1, vz);
+    for (line c of [vec(vx - 1, 0, vz - 1), vec(vx + 1, 0, vz - 1), vec(vx - 1, 0, vz + 1), vec(vx + 1, 0, vz + 1)]) {
+        fill("spruce_fence", line c.x, G + 2, line c.z, line c.x, G + 3, line c.z);
+    }
+    roofHip(vx - 1, vz - 1, vx + 1, vz + 1, G + 4, "spruce", "spruce_planks");
+    putD("lantern", vx, G + 3, vz, "hanging=true");
+    lampPost(vx - 6, G + 1, vz - 6);
+    lampPost(vx + 6, G + 1, vz + 6);
 }
 
 /** A lamp post standing on y. */
@@ -504,6 +530,11 @@ function treeRow(z: num) {
         line px = line x + line h % 5;
         line pz = z + num.floor(line h / 5) % 5;
         line dc = num.root((line px - global wCx) ** 2 + (line pz - global wCz) ** 2);
+        if (global wVil.len() > 0) {
+            if (num.root((line px - global wVil[1]) ** 2 + (line pz - global wVil[2]) ** 2) < global wVil[3] + 12) {
+                line dc = 0;
+            }
+        }
         if (line dc > global wR + 22) {
             line dens = wNoise(line px, line pz, 140, 91);
             line grove = global wPois["grove"];

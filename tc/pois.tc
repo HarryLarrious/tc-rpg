@@ -182,7 +182,7 @@ function placeLabels {
         if (line t != "house" && line t != "farm" && line t != "none") {
             line dr = bldDoor(line b);
             line st = facingStep(b["facing"] as str);
-            line name = bldName(line t);
+            line name = bldNameOf(line b);
             game.spawnTextDisplay(loc((line dr[1] as num) + 0.5 + (line st[1] as num) * 0.6, townY() + 4.2, (line dr[2] as num) + 0.5 + (line st[2] as num) * 0.6), s"<gold><b>%var(name)");
             lastEntity.setDisplayBillboard(type="Vertical");
             lastEntity.setTextDisplayBackground("#000000", 35);

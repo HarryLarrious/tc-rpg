@@ -62,6 +62,7 @@ class Plan:
         self.blds: list[dict] = []           # buildings
         self.farms: list[tuple] = []         # (x0, z0, x1, z1)
         self.pois: dict[str, tuple] = {}
+        self.village = None
 
     # ------------------------------------------------------------ terrain
 
@@ -73,13 +74,14 @@ class Plan:
         hills = 0.6 * vnoise(x, z, 96, 11, s) + 0.3 * vnoise(x, z, 37, 23, s) + 0.1 * vnoise(x, z, 13, 37, s)
         de = min(x, z, self.S - 1 - x, self.S - 1 - z)
         mount = max(0.0, (70 - de) / 70) ** 2 * 38
-        dc = math.hypot(x - self.cx, z - self.cz)
-        t = min(1.0, max(0.0, (dc - self.R - 20) / 60))
-        k = smooth(t)
+        k = 1.0
+        for (sx, sz, sr) in self.flats():
+            dc = math.hypot(x - sx, z - sz)
+            k = min(k, smooth(min(1.0, max(0.0, (dc - sr - 20) / 60))))
         h = 51 + (hills * 20 + mount) * k + (1 - k) * 1
         dr = abs(x - self.river_x(z))
-        if dr < 12:
-            bank = 48 + dr * 0.35
+        if dr < 24:
+            bank = 48 + (dr - 5) * 0.75
             h = min(h, bank) if dr >= 5 else 45 + dr * 0.3
         lx, lz, lr = self.pois.get("lake", (0, 0, 0))
         if lr:
@@ -87,6 +89,33 @@ class Plan:
             if dl < 1.25:
                 h = min(h, 44 + dl * 4.5)
         return round(h)
+
+    def flats(self):
+        out = [(self.cx, self.cz, self.R)]
+        if self.village:
+            out.append((self.village[0], self.village[1], self.village[2]))
+        return out
+
+    def plan_village(self):
+        """The village sits at the end of the country road that points away
+        from every point of interest."""
+        best, bk = -1, 0
+        for k in range(4):
+            ang = self.rot + k * 90 + (hsh(k, 77, self.seed) % 25) - 12
+            dmin = 999
+            for name, (x, z, r) in self.pois.items():
+                a2 = math.degrees(math.atan2(z - self.cz, x - self.cx))
+                d = abs((ang - a2 + 180) % 360 - 180)
+                dmin = min(dmin, d)
+            # Not across the river (west of town).
+            if math.cos(math.radians(ang)) < -0.5:
+                dmin = -1
+            if dmin > best:
+                best, bk = dmin, k
+        ang = math.radians(self.rot + bk * 90 + (hsh(bk, 77, self.seed) % 25) - 12)
+        reach = min(self.cx, self.cz, self.S - self.cx, self.S - self.cz) - 60
+        d = self.wall_r(ang) + min(reach * 0.62, 240)
+        self.village = (self.cx + math.cos(ang) * d, self.cz + math.sin(ang) * d, 40, bk)
 
     # ------------------------------------------------------------ roads
 
@@ -129,6 +158,8 @@ class Plan:
             ex, ez = cx + ux * (gr + reach * 0.85), cz + uz * (gr + reach * 0.85)
             ex = min(max(ex, 40), self.S - 40)
             ez = min(max(ez, 40), self.S - 40)
+            if self.village and self.village[3] == i:
+                ex, ez = self.village[0], self.village[1]
             self.curve(gx + ux * 2, gz + uz * 2, ex, ez, 10, 26, 200 + i, 4, "country")
         # Ring street.
         n = 28
@@ -167,6 +198,25 @@ class Plan:
                     ux3, uz3 = math.cos(ang3), math.sin(ang3)
                     self.curve(cx + ux3 * 30, cz + uz3 * 30, cx + ux3 * R * 0.6, cz + uz3 * R * 0.6, 3, 4, 500 + i, 3, "lane")
 
+    def plan_village_roads(self):
+        vx, vz, VR, _ = self.village
+        P = 7
+        for (a, b) in (((-P, -P), (P, -P)), ((P, -P), (P, P)), ((P, P), (-P, P)), ((-P, P), (-P, -P))):
+            self.roads.append((vx + a[0], vz + a[1], vx + b[0], vz + b[1], 3, "vplaza"))
+        for i in range(4):
+            ang = math.radians(self.rot + 45 + i * 90 + (hsh(i, 31, self.seed) % 20) - 10)
+            ux, uz = math.cos(ang), math.sin(ang)
+            self.curve(vx + ux * 10, vz + uz * 10, vx + ux * VR * 0.95, vz + uz * VR * 0.95, 4, 4, 600 + i, 4, "vmain")
+        n = 16
+        ring = []
+        for i in range(n):
+            a = 2 * math.pi * i / n
+            r = VR * 0.62 + 4 * (vnoise(i * 5, 7, 9, 63, self.seed) - 0.5)
+            ring.append((vx + math.cos(a) * r, vz + math.sin(a) * r))
+        for i in range(n):
+            a, b = ring[i], ring[(i + 1) % n]
+            self.roads.append((a[0], a[1], b[0], b[1], 3, "vring"))
+
     def plan_wall(self):
         n = 18
         for i in range(n):
@@ -183,8 +233,16 @@ class Plan:
         t = 0 if L2 == 0 else max(0, min(1, ((px - x1) * dx + (pz - z1) * dz) / L2))
         return math.hypot(px - (x1 + dx * t), pz - (z1 + dz * t))
 
-    def rect_ok(self, x0, z0, x1, z1, inside=True):
+    def rect_ok(self, x0, z0, x1, z1, inside=True, sid=1):
         cx, cz = self.cx, self.cz
+        if sid == 2:
+            vx, vz, VR, _ = self.village
+            mx, mz = (x0 + x1) / 2, (z0 + z1) / 2
+            if inside and max(math.hypot(px - vx, pz - vz) for px, pz in ((x0, z0), (x1, z0), (x0, z1), (x1, z1))) > VR:
+                return False
+            if abs(mx - vx) < 9 + (x1 - x0) / 2 and abs(mz - vz) < 9 + (z1 - z0) / 2:
+                return False
+            return self.rect_free(x0, z0, x1, z1)
         pts = [(x0, z0), (x1, z0), (x0, z1), (x1, z1), ((x0 + x1) / 2, (z0 + z1) / 2),
                ((x0 + x1) / 2, z0), ((x0 + x1) / 2, z1), (x0, (z0 + z1) / 2), (x1, (z0 + z1) / 2)]
         if inside:
@@ -194,6 +252,11 @@ class Plan:
                     return False
         if abs((x0 + x1) / 2 - cx) < 17 + (x1 - x0) / 2 and abs((z0 + z1) / 2 - cz) < 17 + (z1 - z0) / 2:
             return False
+        return self.rect_free(x0, z0, x1, z1)
+
+    def rect_free(self, x0, z0, x1, z1):
+        pts = [(x0, z0), (x1, z0), (x0, z1), (x1, z1), ((x0 + x1) / 2, (z0 + z1) / 2),
+               ((x0 + x1) / 2, z0), ((x0 + x1) / 2, z1), (x0, (z0 + z1) / 2), (x1, (z0 + z1) / 2)]
         for (a, b, c, d, w, kind) in self.roads:
             lim = w / 2 + 0.6
             for px, pz in pts:
@@ -228,16 +291,16 @@ class Plan:
             facing = "north" if nz > 0 else "south"
         return x0, z0, x0 + bw - 1, z0 + bd - 1, facing
 
-    def try_lot(self, a, b, c, dd, rw, t, side, w, d, btype, h, inside=True):
+    def try_lot(self, a, b, c, dd, rw, t, side, w, d, btype, h, inside=True, sid=1):
         x0, z0, x1, z1, facing = self.lot_rect(a, b, c, dd, rw, t, side, w, d)
-        if not self.rect_ok(x0, z0, x1, z1, inside):
+        if not self.rect_ok(x0, z0, x1, z1, inside, sid):
             return None
         bld = {"type": btype, "x0": x0, "z0": z0, "x1": x1, "z1": z1, "facing": facing,
-               "floors": 1 + (h // 37) % 3}
+               "floors": 1 + (h // 37) % 3, "sid": sid}
         self.blds.append(bld)
         return bld
 
-    def place_along(self, kinds, btype, w, d, salt, t_from=0.0, t_to=1.0, tries=60, inside=True):
+    def place_along(self, kinds, btype, w, d, salt, t_from=0.0, t_to=1.0, tries=60, inside=True, sid=1):
         """Finds a lot for a w x d building fronting a road of one of the
         kinds; returns the building or None."""
         segs = [r for r in self.roads if r[5] in kinds]
@@ -248,7 +311,7 @@ class Plan:
             a, b, c, dd, rw, kind = segs[h % len(segs)]
             t = t_from + (t_to - t_from) * ((h // 7) % 100) / 100
             side = 1 if (h // 701) % 2 else -1
-            bld = self.try_lot(a, b, c, dd, rw, t, side, w, d, btype, h, inside)
+            bld = self.try_lot(a, b, c, dd, rw, t, side, w, d, btype, h, inside, sid)
             if bld:
                 return bld
         return None
@@ -291,6 +354,32 @@ class Plan:
                         pos += w + 1
                     else:
                         pos += 2
+        # The village: its own six required buildings and houses.
+        vspecial = [("keep", 13, 11), ("guild", 11, 9), ("inn", 11, 9), ("library", 9, 9), ("armory", 9, 7), ("blacksmith", 9, 7)]
+        for i, (bt, w, d) in enumerate(vspecial):
+            b = self.place_along(("vplaza", "vmain"), bt, w, d, 3000 + i, 0, 1, 200, sid=2)
+            if b is None:
+                b = self.place_along(("vring", "vmain"), bt, w, d, 3100 + i, 0, 1, 300, sid=2)
+            if b is not None:
+                b["floors"] = 2
+        for si, seg in enumerate(list(self.roads)):
+            a, b, c, dd, rw, kind = seg
+            if kind not in ("vmain", "vring", "vplaza"):
+                continue
+            L = math.hypot(c - a, dd - b)
+            for side in (1, -1):
+                pos = 1.0
+                while pos < L - 3:
+                    h = hsh(si * 2 + (side > 0), int(pos), self.seed + 4)
+                    w = 7 + (h % 2) * 2
+                    d = 7 + ((h // 3) % 2) * 2
+                    t = (pos + w / 2) / L
+                    if t > 1:
+                        break
+                    if self.try_lot(a, b, c, dd, rw, t, side, w, d, "house", h, True, 2):
+                        pos += w + 2
+                    else:
+                        pos += 2
         # Farms outside: along the country roads near the gates.
         nf = 0
         for k in range(60):
@@ -303,7 +392,8 @@ class Plan:
                 nf += 1
             if b:
                 dc = math.hypot((b["x0"] + b["x1"]) / 2 - self.cx, (b["z0"] + b["z1"]) / 2 - self.cz)
-                if dc < self.R + 10 or abs((b["x0"] + b["x1"]) / 2 - self.river_x((b["z0"] + b["z1"]) / 2)) < 16:
+                dv = math.hypot((b["x0"] + b["x1"]) / 2 - self.village[0], (b["z0"] + b["z1"]) / 2 - self.village[1])
+                if dc < self.R + 10 or dv < self.village[2] + 14 or abs((b["x0"] + b["x1"]) / 2 - self.river_x((b["z0"] + b["z1"]) / 2)) < 16:
                     self.blds.remove(b)
                     nf -= 1
         return n
@@ -323,8 +413,10 @@ class Plan:
 
     def run(self):
         self.plan_pois()
+        self.plan_village()
         self.plan_wall()
         self.plan_roads()
+        self.plan_village_roads()
         houses = self.plan_lots()
         return houses
 
@@ -359,12 +451,18 @@ def draw(plan: Plan, out: Path):
     for name, (x, z, r) in plan.pois.items():
         d.ellipse((x - 6, z - 6, x + 6, z + 6), outline=(255, 0, 0), width=2)
         d.text((x + 8, z - 6), name, fill=(255, 255, 255))
+    vx, vz, VR, _ = plan.village
+    d.text((vx + VR, vz), "village", fill=(255, 255, 0))
     out.parent.mkdir(parents=True, exist_ok=True)
     img.save(out)
     # A close-up of the town.
     R = plan.R + 20
     img.crop((plan.cx - R, plan.cz - R, plan.cx + R, plan.cz + R)).resize((R * 6, R * 6), Image.NEAREST).save(
         out.with_name("town.png"))
+    vx, vz, VR, _ = plan.village
+    V = VR + 25
+    img.crop((int(vx - V), int(vz - V), int(vx + V), int(vz + V))).resize((V * 8, V * 8), Image.NEAREST).save(
+        out.with_name("village.png"))
 
 
 def main():

@@ -25,6 +25,10 @@ function landHeight(x: num, z: num): num {
     line mount = num.max(0, (70 - line de) / 70) ** 2 * 38;
     line dc = num.root((x - global wCx) ** 2 + (z - global wCz) ** 2);
     line k = wSmooth(num.clamp((line dc - global wR - 20) / 60, 0, 1));
+    if (global wVil.len() > 0) {
+        line dv = num.root((x - global wVil[1]) ** 2 + (z - global wVil[2]) ** 2);
+        line k = num.min(line k, wSmooth(num.clamp((line dv - global wVil[3] - 20) / 60, 0, 1)));
+    }
     return 51 + (line hills * 20 + line mount) * line k + (1 - line k);
 }
 
@@ -32,9 +36,9 @@ function landHeight(x: num, z: num): num {
 function carveWater(x: num, z: num, h: num, rx: num): num {
     line r = h;
     line dr = num.abs(x - rx);
-    if (line dr < 12) {
+    if (line dr < 24) {
         if (line dr >= 5) {
-            line r = num.min(line r, 48 + line dr * 0.35);
+            line r = num.min(line r, 48 + (line dr - 5) * 0.75);
         } else {
             line r = 45 + line dr * 0.3;
         }
@@ -119,6 +123,7 @@ function placeRun(x0: num, x1: num, z: num, h: num, s: str) {
         game.setRegion(item("stone"), loc(x0, num.max(46, h - 3), z), loc(x1, h - 1, z));
     }
     game.setRegion(item(s), loc(x0, h, z), loc(x1, h, z));
+    game.setRegion(item("air"), loc(x0, num.max(h + 1, waterY() + 1), z), loc(x1, num.max(h + 40, 100), z));
     if (h < waterY()) {
         game.setRegion(item("water_bucket"), loc(x0, h + 1, z), loc(x1, waterY(), z));
     }

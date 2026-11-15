@@ -524,7 +524,11 @@ function spawnerTick {
             line z = num.round(f.z + num.sin(line a) * line r);
             if (x > 8 && z > 8 && x < global wS - 8 && z < global wS - 8) {
                 line dc = num.root((x - global wCx) ** 2 + (z - global wCz) ** 2);
-                if (line dc > global wR + 25 && onRoad(x, z, 3) == 0 && inBuilding(x, z, 3) == 0) {
+                line dv = 999;
+                if (global wVil.len() > 0) {
+                    line dv = num.root((x - global wVil[1]) ** 2 + (z - global wVil[2]) ** 2);
+                }
+                if (line dc > global wR + 25 && line dv > 70 && onRoad(x, z, 3) == 0 && inBuilding(x, z, 3) == 0) {
                     line y = groundY(x, z);
                     if (line y >= waterY()) {
                         line zone = zoneAt(x, z);

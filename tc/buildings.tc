@@ -28,6 +28,18 @@ function oppFacing(f: str): str {
     return line o[f] as str;
 }
 
+/** Display name of building b (the village's keep is a manor). */
+function bldNameOf(b: dict): str {
+    line t = b["type"] as str;
+    if (b.hasKeys("sid") && b["sid"] == 2) {
+        if (t == "keep") { return "Reeve's Manor"; }
+        if (t == "guild") { return "Guild Hall"; }
+        if (t == "inn") { return "The Mossy Kettle"; }
+        if (t == "library") { return "Village Library"; }
+    }
+    return bldName(t);
+}
+
 /** Display names of building types. */
 function bldName(t: str): str {
     line n = {

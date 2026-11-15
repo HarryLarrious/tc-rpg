@@ -30,6 +30,9 @@ function greeting(id: str, uuid: str): str {
     if (role == "lord") {
         return "%var(time), %var(who). Valenmoor stands, but the wilds press closer each night.";
     }
+    if (role == "reeve") {
+        return "%var(time), %var(who). Welcome to our little village. If you seek glory, Lord Valen in the city has need of heroes.";
+    }
     if (role == "smith") {
         return ["%var(time). Steel needs mending? Bring it here.", "Hot work today. What'll it be, %var(who)?", "A %var(race), eh? I've a blade that'd suit you."][1 + line pick % 3] + line mood;
     }

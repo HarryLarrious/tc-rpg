@@ -199,7 +199,7 @@ function roleTitle(r: str): str {
     line t = {lord: "Lord of Valenmoor", guildmaster: "Guildmaster", innkeeper: "Innkeeper", librarian: "Librarian",
         armorer: "Armorer", smith: "Blacksmith", priest: "Priest", barkeep: "Barkeep", alchemist: "Alchemist",
         merchant: "Merchant", baker: "Baker", archmage: "Archmage", captain: "Captain of the Guard",
-        stablemaster: "Stablemaster", guard: "Town Guard", trainer: "Weapons Trainer", villager: "Villager",
+        stablemaster: "Stablemaster", reeve: "Reeve of the Village", guard: "Town Guard", trainer: "Weapons Trainer", villager: "Villager",
         farmer: "Farmer", bard: "Bard", noble: "Noble", child: "Child"};
     if (line t.hasKeys(r)) {
         return line t[r] as str;
@@ -249,7 +249,7 @@ function dressForRole(app: dict, r: str, h: num): dict {
         line armor = {head: [line set, 0xB4B8BC, 0x8A2E2E], torso: [line set, 0xB4B8BC, 0x8A2E2E], arm: [line set, 0xB4B8BC, 0x8A2E2E], leg: [line set, 0xB4B8BC, 0x8A2E2E]};
         line a["main"] = "rpg:weapon/halberd|11843772|4864040|9080466|1";
         if (r == "captain") { line a["main"] = "rpg:weapon/longsword|14080228|3025448|10528944|2"; }
-    } else if (r == "lord" || r == "noble") {
+    } else if (r == "lord" || r == "noble" || r == "reeve") {
         line armor = {head: ["noble", 0xD8A858, 0xE0C060], torso: ["noble", 0x6A1E1E, 0xE0C060], arm: ["noble", 0x6A1E1E, 0xE0C060], leg: ["noble", 0x3A2A1A, 0xE0C060]};
         if (r == "noble") { line armor["head"] = ["", 0, 0]; }
     } else if (r == "librarian" || r == "archmage" || r == "priest") {
@@ -285,6 +285,9 @@ function worldPopulate {
     repeat (line i to global wBlds.len()) {
         line t = global wBlds[line i]["type"] as str;
         line role = workerRole(line t);
+        if (line t == "keep" && global wBlds[line i].hasKeys("sid") && global wBlds[line i]["sid"] == 2) {
+            line role = "reeve";
+        }
         if (line role != "") {
             line k += 1;
             npcSpawn("n%var(k)", line role, line i, npcHomeFor(line k));
@@ -496,7 +499,7 @@ function npcDecide(id: str) {
             line scores["defend"] = 2;
         }
     }
-    if (role == "lord" || role == "librarian" || role == "archmage" || role == "smith" || role == "armorer" || role == "guildmaster" || role == "trainer" || role == "innkeeper" || role == "merchant" || role == "alchemist") {
+    if (role == "lord" || role == "reeve" || role == "librarian" || role == "archmage" || role == "smith" || role == "armorer" || role == "guildmaster" || role == "trainer" || role == "innkeeper" || role == "merchant" || role == "alchemist") {
         // Shopkeepers mostly mind their shops so players can find them.
         line scores["work"] = (line scores["work"] as num) + 0.6;
         if (line night == 0) {
