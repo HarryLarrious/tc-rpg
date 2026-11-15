@@ -90,6 +90,27 @@ function bldDoor(b: dict): list[num] {
     return [line x1, line zm];
 }
 
+/** Places building b's door, standing open (bodies cannot open doors). */
+function openDoor(b: dict, door: str) {
+    line dr = bldDoor(b);
+    line f = b["facing"] as str;
+    line G = townY();
+    putD(door, dr[1] as num, G + 1, dr[2] as num, "facing=%var(f),half=lower,open=true");
+    putD(door, dr[1] as num, G + 2, dr[2] as num, "facing=%var(f),half=upper,open=true");
+}
+
+/** Opens the doors of every building already built. */
+function openAllDoors {
+    repeat (line i to global wBlds.len()) {
+        line b = global wBlds[line i];
+        line t = b["type"] as str;
+        if (line t != "farm" && line t != "none") {
+            openDoor(line b, palette(line t, wHash(line i, 31, worldSeed()))[8] as str);
+        }
+        wBreathe(10);
+    }
+}
+
 /** Outward unit step of facing f: [dx, dz]. */
 function facingStep(f: str): list[num] {
     if (f == "north") { return [0, -1]; }
@@ -260,8 +281,7 @@ function buildBuilding(i: num) {
     line dx = line dr[1];
     line dz = line dr[2];
     line st = facingStep(line f);
-    putD(line p[8], line dx, line G + 1, line dz, "facing=%var(f),half=lower");
-    putD(line p[8], line dx, line G + 2, line dz, "facing=%var(f),half=upper");
+    openDoor(b, line p[8]);
     put("air", line dx, line G + 3, line dz);
     fillD(line p[4], line dx, line G + 3, line dz, line dx, line G + 3, line dz, "axis=y");
     fill("stone_bricks", line dx + line st[1], line G, line dz + line st[2], line dx + line st[1] * 2, line G, line dz + line st[2] * 2);

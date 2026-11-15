@@ -705,7 +705,7 @@ function interact {
     line uuid = default.uuid;
     line f = bodyFeet(line uuid);
     line best = "";
-    line bd = 4;
+    line bd = 6;
     for (line id of global nList) {
         line d = (global nPos[line id] - f).len();
         if (line d < line bd) {

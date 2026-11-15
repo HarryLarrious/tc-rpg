@@ -1,8 +1,9 @@
 // The character designer: a dialog of choices previewed live on the
 // character, who turns to face the camera while it is open.
 
-/** Per player: 1 while designing. */
+/** Per player: 1 while designing, and the camera distance to restore. */
 declare global pDesign: dict[num];
+declare global pCamKeep: dict[num];
 
 /** Hex text of color c ("#RRGGBB"). */
 function hexOf(c: num): str {
@@ -15,6 +16,16 @@ function hexOf(c: num): str {
         line v = num.floor(line v / 16);
     }
     return "#%var(s)";
+}
+
+/** Names of race r's skin presets. */
+function skinNames(r: str): list[str] {
+    if (r == "demon") { return ["Crimson", "Wine", "Plum", "Dusk", "Ash", "Ember"]; }
+    if (r == "elf") { return ["Moonpale", "Fair", "Golden", "Sylvan green", "Twilight", "Bark"]; }
+    if (r == "felkin" || r == "lupin" || r == "ursan" || r == "leporin") {
+        return ["Cream", "Honey", "Russet", "Umber", "Chestnut", "Snow"];
+    }
+    return ["Porcelain", "Fair", "Tan", "Olive", "Brown", "Deep"];
 }
 
 /** Opens the designer (first join, or from the Journal for 50 gold). */
@@ -30,18 +41,21 @@ function designerOpen {
         enterWorld();
     }
     global pDesign[uuid] = 1;
+    // Frame the character: a level look and a close camera.
+    global pCamKeep[uuid] = global pCamDist[uuid];
+    global pCamDist[uuid] = 3;
     designerDialog(s"");
 }
 
 /** Option lists: ids and labels for the color pickers. */
-function colorOptions(cols: list[num]): list {
+function colorOptions(cols: list[num], names: list[str]): list {
     line ids: list[str] = [];
     line labels: list[txt] = [];
     repeat (line i to cols.len()) {
         line c = cols[line i];
-        line h = hexOf(line c);
+        line n = names[line i];
         line ids.append("%var(c)");
-        line labels.append(s"<%var(h)>■■■ <white>%var(i)");
+        line labels.append(s"%var(n)");
     }
     return [line ids, line labels];
 }
@@ -89,10 +103,11 @@ function designerDialog(msg: txt) {
         line cb = "none";
     }
     dialog.addOptionInput(line d, "beard", s"Beard", 220, line cb, line bs, line bl);
-    for (line pick of [["skin", "Skin / fur", raceSkins(race)], ["hair", "Hair color", hairColors()], ["eye", "Eyes", eyeColors()], ["cloth", "Tunic", clothColors()], ["pants", "Trousers", clothColors()]]) {
+    line cn = ["Brown", "Moss", "Navy", "Crimson", "Violet", "Linen", "Charcoal", "Teal", "Ochre", "White"];
+    for (line pick of [["skin", "Skin / fur", raceSkins(race), skinNames(race)], ["hair", "Hair color", hairColors(), ["Black", "Dark brown", "Brown", "Light brown", "Blonde", "Platinum", "Red", "Grey", "Blue", "Green", "Purple", "Pink"]], ["eye", "Eyes", eyeColors(), ["Blue", "Green", "Brown", "Grey", "Amber", "Red", "Violet", "Teal"]], ["cloth", "Tunic", clothColors(), line cn], ["pants", "Trousers", clothColors(), line cn]]) {
         line key = pick[1] as str;
         line label = pick[2] as str;
-        line opts = colorOptions(pick[3] as list[num]);
+        line opts = colorOptions(pick[3] as list[num], pick[4] as list[str]);
         line curc = app[line key] as num;
         line ids = opts[1] as list[str];
         if (ids.find("%var(curc)") == 0) {
@@ -138,7 +153,8 @@ function designerApply {
     pdSet(uuid, "app", line app);
     statsRecalc(uuid);
     rigRemove(uuid);
-    rigSpawn(uuid, global pBody[uuid], loc(0, 0, 0), playerApp(uuid));
+    line f = bodyFeet(uuid);
+    rigSpawn(uuid, global pBody[uuid], loc(f.x, f.y, f.z), playerApp(uuid));
 }
 
 /** Designer buttons. */
@@ -158,6 +174,9 @@ function designerFinish {
     }
     pdSet(uuid, "made", 1);
     global pDesign[uuid] = 0;
+    if (global pCamKeep.hasKeys(uuid) && global pCamKeep[uuid] > 0) {
+        global pCamDist[uuid] = global pCamKeep[uuid];
+    }
     global pHp[uuid] = stat(uuid, "maxHp");
     hotbarRefresh(uuid);
     if (line first) {

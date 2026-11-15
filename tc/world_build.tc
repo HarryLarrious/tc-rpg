@@ -94,6 +94,13 @@ function worldCommand(words: list) {
         saved wPhase = 1;
         saved wStep = 0;
         default.sendMessage(s"<gray>Build progress reset.");
+    } else if (line sub == "doors") {
+        openAllDoors();
+        default.sendMessage(s"<gray>Doors opened.");
+    } else if (line sub == "labels") {
+        placeLabels();
+        line n = saved wLabels.len();
+        default.sendMessage(s"<gray>%var(n) labels placed.");
     } else if (line sub == "replan") {
         saved wSaved = {};
         global wPlanned = 0;
