@@ -39,6 +39,16 @@ function rarData(r: num): list {
     return line d[num.clamp(r, 1, 6)] as list;
 }
 
+/** Item name text colored by rarity r. */
+function rarName(r: num, name: str): txt {
+    if (r >= 6) { return s"<!i><#FF4A4A>%var(name)"; }
+    if (r == 5) { return s"<!i><#FFAA00>%var(name)"; }
+    if (r == 4) { return s"<!i><#B05CFF>%var(name)"; }
+    if (r == 3) { return s"<!i><#4C9BFF>%var(name)"; }
+    if (r == 2) { return s"<!i><#5CFF6A>%var(name)"; }
+    return s"<!i><#C8C8C8>%var(name)";
+}
+
 /** Weapon types: [name, damage, speed, reach, STR, DEX, INT scaling,
  * hands, animation set, bonus stat (1-5, 0 none), slot rule, variants].
  * Slot rules: wand (= rarity magic slots), staff (ceil(r/2) magic),
@@ -121,14 +131,14 @@ function hash(n: num): num {
 }
 
 /** Lore line for stat bonus list b. */
-function statLore(b: list[num]): list[str] {
+function statLore(b: list[num]): list[txt] {
     line names = ["STR", "DEX", "INT", "VIT", "AGI"];
-    line out: list[str] = [];
+    line out: list[txt] = [];
     repeat (line i to 5) {
         if (b[line i] > 0) {
             line n = line names[line i];
             line v = b[line i];
-            line out.append("<#7FD4FF>+%var(v) %var(n)");
+            line out.append(s"<#7FD4FF>+%var(v) %var(n)");
         }
     }
     return line out;
@@ -172,7 +182,7 @@ function makeWeapon(t: str, m: num, r: num, seed: num): item {
     line mname = line md[1] as str;
     line wname = line w[1] as str;
     line spd = line w[3];
-    line name = "%var(rcol)%var(mname) %var(wname)";
+    line name = "%var(mname) %var(wname)";
     if (r >= 5) {
         line epithets = ["of Embers", "of the Gale", "of Dusk", "of the Lion", "of Echoes", "of Ruin", "of the Moon", "of Kings"];
         line ep = line epithets[1 + hash(seed + 7) % 8];
@@ -185,7 +195,7 @@ function makeWeapon(t: str, m: num, r: num, seed: num): item {
         line lore.append(s"<white>Damage <yellow>%var(dmg)  <white>Speed <yellow>%var(spd)");
     }
     for (line l of statLore(line b)) {
-        line lore.append(s"%var(l)");
+        line lore.append(line l);
     }
     if (line slots > 0) {
         line lore.append(s"<#C080FF>%var(slots) %var(slotKind) slot(s)");
@@ -197,7 +207,7 @@ function makeWeapon(t: str, m: num, r: num, seed: num): item {
     line reqLvl = num.max(1, m * 5 - 5 + r);
     line lore.append(s"<dark_gray>Requires level %var(reqLvl)");
     line it = item("paper").setModel("rpg:weapon/%var(t)").setModelDataStrings(["%var(variant)"]).setModelDataNumbers([line md[3] as num, line md[4] as num, line md[5] as num], type="Colors");
-    line it = line it.setName(s"<!i>%var(name)").setLore(line lore);
+    line it = line it.setName(rarName(r, line name)).setLore(line lore);
     line it = line it.setTag("k", "weapon").setTag("t", t).setTag("m", m).setTag("r", r).setTag("v", line variant).setTag("d", line dmg);
     line it = line it.setTag("s1", line b[1]).setTag("s2", line b[2]).setTag("s3", line b[3]).setTag("s4", line b[4]).setTag("s5", line b[5]);
     line it = line it.setTag("sl", line slots).setTag("slk", line slotKind).setTag("dur", line dmax).setTag("dmax", line dmax).setTag("lvl", line reqLvl);
@@ -239,7 +249,7 @@ function makeArmor(slot: str, set: str, m: num, r: num, seed: num): item {
     }
     line lore: list[txt] = [s"<gray>%var(rname) %var(setName) armor <dark_gray>| Tier %var(m)", s"<white>Armor <yellow>%var(av)"];
     for (line l of statLore(line b)) {
-        line lore.append(s"%var(l)");
+        line lore.append(line l);
     }
     if ((line sd[3] as num) == 1) {
         line lore.append(s"<dark_gray>Heavy: slows you a little");
@@ -250,7 +260,7 @@ function makeArmor(slot: str, set: str, m: num, r: num, seed: num): item {
     line ca = line colors[1] as num;
     line cb = line colors[2] as num;
     line it = line it.setModelDataNumbers([0xFFFFFF, 0xFFFFFF, 0xFFFFFF, 0xFFFFFF, line ca, line cb, 0xFFFFFF, line ca], type="Colors");
-    line it = line it.setName(s"<!i>%var(rcol)%var(mname) %var(piece)").setLore(line lore);
+    line it = line it.setName(rarName(r, "%var(mname) %var(piece)")).setLore(line lore);
     line it = line it.setTag("k", "armor").setTag("t", slot).setTag("set", set).setTag("m", m).setTag("r", r).setTag("d", line av);
     line it = line it.setTag("s1", line b[1]).setTag("s2", line b[2]).setTag("s3", line b[3]).setTag("s4", line b[4]).setTag("s5", line b[5]);
     line it = line it.setTag("c1", line ca).setTag("c2", line cb).setTag("lvl", line reqLvl);
@@ -315,6 +325,7 @@ function equipSet(uuid: str, slot: str, it: item) {
     statsRecalc(uuid);
     if (hasBody(uuid) == 1) {
         rigRefresh(uuid, playerApp(uuid));
+        hotbarRefresh(uuid);
     }
 }
 

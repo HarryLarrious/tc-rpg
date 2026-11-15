@@ -22,7 +22,7 @@ function designerOpen {
     line uuid = default.uuid;
     if ((pdGet(uuid, "made") as num) == 1 && global pDesign[uuid] != 1) {
         if ((pdGet(uuid, "gold") as num) < 50) {
-            sendBar(uuid, "<red>The mirror costs 50 gold.");
+            sendBar(uuid, s"<red>The mirror costs 50 gold.");
             return;
         }
     }
@@ -30,7 +30,7 @@ function designerOpen {
         enterWorld();
     }
     global pDesign[uuid] = 1;
-    designerDialog("");
+    designerDialog(s"");
 }
 
 /** Option lists: ids and labels for the color pickers. */
@@ -46,7 +46,7 @@ function colorOptions(cols: list[num]): list {
     return [line ids, line labels];
 }
 
-function designerDialog(msg: str) {
+function designerDialog(msg: txt) {
     line uuid = default.uuid;
     line app = pdGet(uuid, "app") as dict;
     line race = app["race"] as str;
@@ -57,9 +57,7 @@ function designerDialog(msg: str) {
     line d = dialog.create("designer", s"<gold><b>Create your character", canClose="False", type="Multi Action");
     line blurb = raceBlurb(race);
     dialog.addBodyText(line d, s"<white>%var(blurb)");
-    if (msg != "") {
-        dialog.addBodyText(line d, s"%var(msg)");
-    }
+    dialog.addBodyText(line d, msg);
     line rl: list[txt] = [];
     for (line r of raceIds()) {
         line n = raceName(line r);
@@ -147,7 +145,7 @@ function designerApply {
 function designerButton(id: str) {
     if (id == "d_prev") {
         designerApply();
-        designerDialog("<gray>Previewing. Change anything, then press Done.");
+        designerDialog(s"<gray>Previewing. Change anything, then press Done.");
     }
 }
 

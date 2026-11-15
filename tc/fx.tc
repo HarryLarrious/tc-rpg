@@ -59,9 +59,9 @@ function fxSlash(center: vec, yaw: num, plane: num, sweep: num, color: num, reac
 
 /** Floating text at p that rises and fades (damage numbers). big 1 for a
  * larger, bolder one. */
-function fxText(p: vec, text: str, big: num) {
+function fxText(p: vec, text: txt, big: num) {
     line q = p + vec(num.randomd(-0.4, 0.4), num.randomd(0, 0.3), num.randomd(-0.4, 0.4));
-    game.spawnTextDisplay(loc(line q.x, line q.y, line q.z), s"%var(text)");
+    game.spawnTextDisplay(loc(line q.x, line q.y, line q.z), text);
     line id = lastEntity.uuid;
     lastEntity.setDisplayBillboard(type="Center");
     lastEntity.setTextDisplayBackground("#000000", 0);
@@ -78,11 +78,19 @@ function fxText(p: vec, text: str, big: num) {
 function fxDamage(p: vec, dmg: num, crit: num, elem: str) {
     line d = num.round(dmg);
     if (crit == 1) {
-        fxText(p, "<#FFC83C><b>%var(d)!", 1);
+        fxText(p, s"<#FFC83C><b>%var(d)!", 1);
         return;
     }
-    line col = elemColorTag(elem);
-    fxText(p, "<%var(col)>%var(d)", 0);
+    if (elem == "fire") { fxText(p, s"<#FF7A2A>%var(d)", 0); }
+    else if (elem == "ice") { fxText(p, s"<#9EE8FF>%var(d)", 0); }
+    else if (elem == "lightning") { fxText(p, s"<#FFF06A>%var(d)", 0); }
+    else if (elem == "water") { fxText(p, s"<#4AA8FF>%var(d)", 0); }
+    else if (elem == "earth") { fxText(p, s"<#B08A4A>%var(d)", 0); }
+    else if (elem == "shadow") { fxText(p, s"<#B07AFF>%var(d)", 0); }
+    else if (elem == "poison") { fxText(p, s"<#8AE04A>%var(d)", 0); }
+    else if (elem == "life" || elem == "light") { fxText(p, s"<#FFFBD0>%var(d)", 0); }
+    else if (elem == "arcane") { fxText(p, s"<#E080FF>%var(d)", 0); }
+    else { fxText(p, s"<white>%var(d)", 0); }
 }
 
 /** MiniMessage color of element e. */

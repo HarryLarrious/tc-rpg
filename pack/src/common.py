@@ -46,7 +46,7 @@ def _noise(rng: random.Random, w: int, h: int, amp: float) -> list[list[float]]:
     return [[rng.uniform(-amp, amp) for _ in range(w)] for _ in range(h)]
 
 
-def make_texture(name: str, kind: str, seed: int = 0) -> str:
+def make_texture(name: str, kind: str, seed: int = 0, rgb: tuple | None = None) -> str:
     """Writes a grayscale (tinted later) or colored 32 x 32 texture and
     returns its resource id."""
     rng = random.Random(f"{name}{seed}")
@@ -90,7 +90,10 @@ def make_texture(name: str, kind: str, seed: int = 0) -> str:
             else:
                 raise ValueError(kind)
             g = max(0, min(255, int(v)))
-            px[x, y] = (g, g, g, 255)
+            if rgb:
+                px[x, y] = tuple(int(g * c / 255) for c in rgb) + (255,)
+            else:
+                px[x, y] = (g, g, g, 255)
     path = ASSETS / "textures/item" / f"{name}.png"
     path.parent.mkdir(parents=True, exist_ok=True)
     img.save(path)

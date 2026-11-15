@@ -45,6 +45,9 @@ T = {}
 def textures():
     for kind in ("skin", "cloth", "leather", "metal", "chain", "hair", "fur", "dark", "white", "bone"):
         T[kind] = make_texture(f"body_{kind}", kind)
+    T["boot"] = make_texture("body_boot", "leather", rgb=(110, 74, 46))
+    T["belt"] = make_texture("body_belt", "leather", rgb=(70, 48, 30))
+    T["buckle"] = make_texture("body_buckle", "metal", rgb=(230, 190, 90))
 
 
 # ---------------------------------------------------------------- head
@@ -252,8 +255,11 @@ def torso_base(b: dict) -> Model:
     m.box((-hw, 0, -hd), (hw, th, hd), T["cloth"], CLOTH)
     # Neckline (skin) and belt.
     m.box((-1.5, th - 1.5, hd), (1.5, th, hd + 0.05), T["skin"], SKIN)
-    m.box((-hw - 0.15, 1.2, -hd - 0.15), (hw + 0.15, 2.3, hd + 0.15), T["leather"], PANTS)
-    m.box((-0.7, 1.1, hd + 0.1), (0.7, 2.4, hd + 0.3), T["metal"])
+    m.box((-hw - 0.15, 1.2, -hd - 0.15), (hw + 0.15, 2.3, hd + 0.15), T["belt"])
+    m.box((-0.7, 1.1, hd + 0.1), (0.7, 2.4, hd + 0.3), T["buckle"])
+    # Collar and hem trim in the trousers color.
+    m.box((-hw - 0.1, th - 0.6, -hd - 0.1), (hw + 0.1, th, hd + 0.1), T["cloth"], PANTS)
+    m.box((-hw - 0.12, 0, -hd - 0.12), (hw + 0.12, 0.6, hd + 0.12), T["cloth"], PANTS)
     if b["bust"]:
         m.box((-hw + 0.6, th - 5.5, hd), (hw - 0.6, th - 2.5, hd + 1.1), T["cloth"], CLOTH)
     return m
@@ -394,7 +400,8 @@ def leg_base(b: dict) -> Model:
     lw, ll = b["lw"], b["ll"]
     h = lw / 2
     m.box((-h, -ll, -h), (h, 0, h), T["cloth"], PANTS)
-    m.box((-h - 0.2, -ll, -h - 0.2), (h + 0.2, -ll + 3.5, h + 0.4), T["leather"])
+    m.box((-h - 0.2, -ll, -h - 0.2), (h + 0.2, -ll + 3.5, h + 0.4), T["boot"])
+    m.box((-h - 0.25, -ll + 3.2, -h - 0.25), (h + 0.25, -ll + 3.9, h + 0.45), T["belt"])
     return m
 
 

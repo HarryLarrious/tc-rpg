@@ -304,7 +304,7 @@ function worldPopulate {
     }
     // Villagers: about one per four houses.
     repeat (line i to global wBlds.len()) {
-        if (global wBlds[line i]["type"] == "house" && line i % 4 == 0) {
+        if (global wBlds[line i]["type"] == "house" && line i % 7 == 0) {
             line k += 1;
             line h = wHash(line i, 7, 77);
             line role = ["villager", "villager", "farmer", "noble", "child", "villager"][1 + line h % 6] as str;
@@ -424,6 +424,15 @@ function npcCommand(words: list) {
     }
     if (line sub == "spawn") {
         start npcPopulateProc;
+    } else if (line sub == "goto") {
+        // @npc goto ROLE: walk up to the first NPC with that role.
+        for (line id of global nList) {
+            if (global nRole[line id] == words[3]) {
+                line p = global nPos[line id];
+                bodyTeleport(loc(line p.x + 2, line p.y, line p.z));
+                return;
+            }
+        }
     } else if (line sub == "clear") {
         npcClear();
     } else {
@@ -673,8 +682,8 @@ function npcStep(id: str) {
     select entitiesByName(global nBody[id]);
     selectedEntity.setVelocity(vec(line v.x, line vy, line v.z));
     select reset;
-    // Animate only when someone can see it.
-    if (line near < 48) {
+    // Animate only when someone can see it, idle ones only up close.
+    if (line near < 48 && (line v.len() > 0.01 || line near < 16)) {
         line sp = line v.len();
         line ph = (global nPhase[id] + line sp * 230 * 4) % 360;
         global nPhase[id] = line ph;
@@ -705,7 +714,7 @@ function interact {
         }
     }
     if (line best == "") {
-        sendBar(line uuid, "<gray>No one to talk to here.");
+        sendBar(line uuid, s"<gray>No one to talk to here.");
         return;
     }
     talkTo(line best);

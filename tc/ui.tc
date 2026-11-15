@@ -150,7 +150,7 @@ playerevent changeSlot {
     line e = line entries[line n - 1];
     line c = slotContent(line uuid, line e);
     if (line c == "") {
-        sendBar(line uuid, "<gray>That slot is empty.");
+        sendBar(line uuid, s"<gray>That slot is empty.");
         return;
     }
     if (line e[1] == "magic") {
@@ -181,7 +181,7 @@ function journalOpen {
     line gold = line r["gold"];
     line pts = line r["pts"];
     line rank = guildRankName(line r["rank"] as num);
-    line d = dialog.create("journal", s"<gold><b>Journal</b>", type="Multi Action with Exit Button");
+    line d = dialog.create("journal", s"<gold><b>Journal</b>", type="Multi Action");
     dialog.addBodyText(line d, s"<white>%var(race) <gray>| Level <yellow>%var(lvl)</yellow> <gray>(%var(xp)/%var(need) XP) | <gold>%var(gold) gold</gold> | Guild rank <aqua>%var(rank)");
     if ((line pts as num) > 0) {
         dialog.addBodyText(line d, s"<#9BE27A>You have %var(pts) unspent stat points.");
@@ -205,7 +205,7 @@ function charSheet {
     line r = pdOf(line uuid);
     line base = line r["base"] as list[num];
     line pts = line r["pts"];
-    line d = dialog.create("char", s"<gold><b>Character</b>", type="Multi Action with Exit Button");
+    line d = dialog.create("char", s"<gold><b>Character</b>", type="Multi Action");
     line names = ["STR", "DEX", "INT", "VIT", "AGI"];
     line keys = ["str", "dex", "int", "vit", "agi"];
     line descs = ["Heavy and blunt weapons", "Light, piercing and ranged weapons, critical hits", "Spell power, mana, magic efficiency", "Health and its regeneration", "Stamina, speed, attack speed"];
@@ -239,7 +239,7 @@ function charSheet {
 function wordsPage {
     line uuid = default.uuid;
     line known = pdGet(line uuid, "words") as list[str];
-    line d = dialog.create("words", s"<#E080FF><b>Words of Power", type="Multi Action with Exit Button");
+    line d = dialog.create("words", s"<#E080FF><b>Words of Power", type="Multi Action");
     dialog.addBodyText(line d, s"<gray>Combine words into a phrase. Elements set the kind of magic, forms how it travels, verbs what it does, and modifiers shape it. Each word costs mana.");
     for (line cls of ["elem", "form", "verb", "mod"]) {
         line title = {elem: "Elements", form: "Forms", verb: "Verbs", mod: "Modifiers"}[line cls] as str;
@@ -264,10 +264,10 @@ function wordsPage {
 }
 
 /** The Spell Loom: type a phrase, preview it, inscribe it into a slot. */
-function loomOpen(phrase: str, msg: str) {
+function loomOpen(phrase: str, msg: txt) {
     line uuid = default.uuid;
     line entries = slotEntries(uuid);
-    line d = dialog.create("loom", s"<#E080FF><b>Spell Loom", type="Multi Action with Exit Button");
+    line d = dialog.create("loom", s"<#E080FF><b>Spell Loom", type="Multi Action");
     line nMagic = 0;
     for (line e of line entries) {
         if (line e[1] == "magic") {
@@ -277,9 +277,7 @@ function loomOpen(phrase: str, msg: str) {
     if (line nMagic == 0) {
         dialog.addBodyText(line d, s"<red>You need a wand or staff with spell slots. Wands hold one slot per rarity (up to six); staves add slots too.");
     }
-    if (msg != "") {
-        dialog.addBodyText(line d, s"%var(msg)");
-    }
+    dialog.addBodyText(line d, msg);
     if (phrase != "") {
         line sp = spellCompile(uuid, phrase, 1);
         if (line sp.hasKeys("err")) {
@@ -310,14 +308,12 @@ function loomOpen(phrase: str, msg: str) {
 }
 
 /** Weapon arts page: the arts known and the ability slots. */
-function artsPage(msg: str) {
+function artsPage(msg: txt) {
     line uuid = default.uuid;
     line arts = pdArts(uuid);
     line entries = slotEntries(uuid);
-    line d = dialog.create("arts", s"<#FFC83C><b>Weapon Arts", type="Multi Action with Exit Button");
-    if (msg != "") {
-        dialog.addBodyText(line d, s"%var(msg)");
-    }
+    line d = dialog.create("arts", s"<#FFC83C><b>Weapon Arts", type="Multi Action");
+    dialog.addBodyText(line d, msg);
     line slots = 0;
     for (line e of line entries) {
         if (line e[1] == "ability") {
@@ -361,7 +357,7 @@ function artSet(uuid: str, a: str) {
 
 /** Camera page. */
 function camPage {
-    line d = dialog.create("cam", s"<gray><b>Camera", type="Multi Action with Exit Button");
+    line d = dialog.create("cam", s"<gray><b>Camera", type="Multi Action");
     dialog.addNumberInput(line d, "dist", s"Distance", 1.5, 8, global pCamDist[default.uuid], 0.5, 200);
     dialog.addButton(line d, s"<green>Apply", s"Set the camera distance", "cam_set", 100);
     dialog.addButton(line d, s"Back", s"Journal", "j_back", 100);
@@ -378,11 +374,11 @@ playerevent clickDialogButton {
     } else if (line id == "j_equip") {
         equipMenu();
     } else if (line id == "j_loom") {
-        loomOpen("", "");
+        loomOpen("", s"");
     } else if (line id == "j_words") {
         wordsPage();
     } else if (line id == "j_arts") {
-        artsPage("");
+        artsPage(s"");
     } else if (line id == "j_quests") {
         questsPage();
     } else if (line id == "j_cam") {
@@ -404,24 +400,24 @@ playerevent clickDialogButton {
         }
         charSheet();
     } else if (line id == "l_prev") {
-        loomOpen(game.getDialogText("phrase"), "");
+        loomOpen(game.getDialogText("phrase"), s"");
     } else if (line id.startsWith("l_ins_")) {
         line k = num.parse(line id.replace("l_ins_", ""));
         line phrase: str = game.getDialogText("phrase").setCase(case="lowercase");
         line sp = spellCompile(line uuid, line phrase, 1);
         if (line sp.hasKeys("err")) {
             line err = line sp["err"] as str;
-            loomOpen(line phrase, "<red>%var(err)");
+            loomOpen(line phrase, s"<red>%var(err)");
             return;
         }
         slotInscribe(line uuid, slotEntries(line uuid)[line k], line phrase);
         hotbarRefresh(line uuid);
         line name = line sp["name"] as str;
         default.playSound(snd("Enchantment Table Use", 1, 1));
-        loomOpen(line phrase, "<green>Inscribed <#E080FF>%var(name)</#E080FF> into slot %math(%var(k)+1).");
+        loomOpen(line phrase, s"<green>Inscribed <#E080FF>%var(name)</#E080FF> into slot %math(%var(k)+1).");
     } else if (line id.startsWith("a_set_")) {
         artSet(line uuid, line id.replace("a_set_", ""));
-        artsPage("<green>Set.");
+        artsPage(s"<green>Set.");
     } else if (line id == "a_clear") {
         for (line e of slotEntries(line uuid)) {
             if (line e[1] == "ability") {
@@ -429,7 +425,7 @@ playerevent clickDialogButton {
             }
         }
         hotbarRefresh(line uuid);
-        artsPage("<gray>Cleared.");
+        artsPage(s"<gray>Cleared.");
     } else {
         dialogRoute(line id);
     }
@@ -498,7 +494,7 @@ function equipMenuClick(uuid: str, idx: num) {
         if (line k == "weapon" || line k == "armor") {
             line req = it.getTag("lvl") as num;
             if (req > (pdGet(uuid, "lvl") as num)) {
-                sendBar(uuid, "<red>You need level %var(req) for that.");
+                sendBar(uuid, s"<red>You need level %var(req) for that.");
                 default.playSound(snd("Villager No", 1, 1));
             } else {
                 line sl = it.getTag("t") as str;
@@ -524,7 +520,7 @@ function equipMenuClick(uuid: str, idx: num) {
             if (learnWord(uuid, it.getTag("word") as str) == 1) {
                 default.setItemInSlot(item("air"), idx);
             } else {
-                sendBar(uuid, "<gray>You already know that word.");
+                sendBar(uuid, s"<gray>You already know that word.");
             }
         } else if (line k == "potion") {
             drinkPotion(uuid, it);

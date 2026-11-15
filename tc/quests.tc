@@ -41,7 +41,7 @@ function boardPage {
     line uuid = default.uuid;
     line rank = pdGet(uuid, "rank") as num;
     line pool = contractPool(rank);
-    line d = dialog.create("board", s"<aqua><b>Contract Board</b> <gray>(rank %var(rn))", type="Multi Action with Exit Button");
+    line d = dialog.create("board", s"<aqua><b>Contract Board</b> <gray>(rank %var(rn))", type="Multi Action");
     line rn = guildRankName(rank);
     line done = 0;
     if (pdOf(uuid).hasKeys("done")) {
@@ -95,7 +95,7 @@ function questOnKill(uuid: str, t: str) {
             line have = line q[3];
             line need = line q[2];
             line label = line q[6] as str;
-            sendBar(uuid, "<aqua>%var(label): %var(have)/%var(need)");
+            sendBar(uuid, s"<aqua>%var(label): %var(have)/%var(need)");
             if (line have == line need) {
                 select playersByName(uuid);
                 selected.sendMessage(s"<aqua>Contract complete: <white>%var(label)</white>. <gray>Report to the guild.");
@@ -156,7 +156,7 @@ function questReport(uuid: str) {
 /** Contracts page in the Journal. */
 function questsPage {
     line uuid = default.uuid;
-    line d = dialog.create("quests", s"<aqua><b>Quests", type="Multi Action with Exit Button");
+    line d = dialog.create("quests", s"<aqua><b>Quests", type="Multi Action");
     line st = lordStage(uuid);
     line story = ["Speak with Lord Aldric Valen in his keep.", "Defeat Varro the Bandit Chief at the camp in the wilds.", "Report Varro's defeat to the lord.",
         "Destroy the Brood Mother in the hill cave.", "Report the Brood Mother's death to the lord.", "Descend beneath the ruins and slay the Crypt Lord.",
@@ -220,7 +220,7 @@ function lordTalk(uuid: str) {
     } else {
         line say = "Valenmoor will remember you, hero. The guild still has work, if you crave it.";
     }
-    line d = dialog.create("lord", s"<gold><b>Lord Aldric Valen", type="Multi Action with Exit Button");
+    line d = dialog.create("lord", s"<gold><b>Lord Aldric Valen", type="Multi Action");
     dialog.addBodyText(line d, s"<white>\"%var(say)\"");
     default.openDialog(line d);
 }

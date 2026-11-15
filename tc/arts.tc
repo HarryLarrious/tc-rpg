@@ -51,12 +51,12 @@ function artUse(uuid: str, a: str) {
     line cd = global pArtCd[uuid];
     if (line cd.hasKeys(a) && (line cd[a] as num) > now()) {
         line s = num.ceil(((line cd[a] as num) - now()) / 20);
-        sendBar(uuid, "<gray>Ready in %var(s)s");
+        sendBar(uuid, s"<gray>Ready in %var(s)s");
         return;
     }
     line ad = artData(a);
     if (staminaUse(uuid, line ad[2] as num) == 0) {
-        sendBar(uuid, "<red>Too tired!");
+        sendBar(uuid, s"<red>Too tired!");
         return;
     }
     line cd[a] = now() + (line ad[3] as num);
@@ -73,7 +73,7 @@ function artUse(uuid: str, a: str) {
     }
     actStart(uuid, "ability", line len);
     line n = line ad[1] as str;
-    fxText(bodyFeet(uuid) + vec(0, 2.6, 0), "<#FFC83C><b>%var(n)", 0);
+    fxText(bodyFeet(uuid) + vec(0, 2.6, 0), s"<#FFC83C><b>%var(n)", 0);
 }
 
 /** The art's moment of effect. */
@@ -131,7 +131,7 @@ function abilityRelease(uuid: str) {
             }
         }
         if (line best == "") {
-            sendBar(uuid, "<gray>No foe in reach.");
+            sendBar(uuid, s"<gray>No foe in reach.");
             return;
         }
         line ep = global ePos[line best];

@@ -190,10 +190,10 @@ function enemyBarUpdate(id: str) {
 }
 
 /** One HUD line for a locked-on enemy. */
-function enemyHudLine(id: str): str {
+function enemyHudLine(id: str): txt {
     line name = monData(global eType[id])[1] as str;
     line hp = num.ceil(global eHp[id]);
-    return "◎ %var(name) %var(hp)";
+    return s"<#FF8080>◎ %var(name) %var(hp)";
 }
 
 /** Removes enemy id (no reward). */

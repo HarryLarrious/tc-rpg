@@ -15,9 +15,17 @@ function ensureGameLoop {
 process gameLoop {
     global gLoopId = game.ticksSinceStartup + 1;
     line me = global gLoopId;
+    // Entities left over from before a restart: our state about them is
+    // gone, so clear them all and put the town back.
+    select allEntities;
+    selectedEntity.remove();
+    select reset;
     planLoad();
     if (saved wAuto == 1 && global wRun == 0) {
         start worldBuilder;
+    } else if (saved wPhase >= worldPhases().len()) {
+        placeLabels();
+        start npcPopulateProc;
     }
     while (global gLoopId == line me) {
         global gBeat = game.ticksSinceStartup;
@@ -55,7 +63,7 @@ function poisonTick {
     for (line uuid, line t of global pPoison) {
         if (line t > now() && global pBody.hasKeys(line uuid)) {
             global pHp[line uuid] = num.max(1, global pHp[line uuid] - 2);
-            fxText(bodyFeet(line uuid) + vec(0, 2.2, 0), "<#8AE04A>-2", 0);
+            fxText(bodyFeet(line uuid) + vec(0, 2.2, 0), s"<#8AE04A>-2", 0);
         }
     }
 }

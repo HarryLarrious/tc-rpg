@@ -91,7 +91,7 @@ function talkTo(id: str) {
     line role = global nRole[id];
     line title = roleTitle(role);
     line g = greeting(id, uuid);
-    line d = dialog.create("talk", s"<gold>%var(name) <gray>- %var(title)", type="Multi Action with Exit Button");
+    line d = dialog.create("talk", s"<gold>%var(name) <gray>- %var(title)", type="Multi Action");
     dialog.addBodyText(line d, s"<white>\"%var(g)\"");
     dialog.setColumnCount(line d, 2);
     if (role == "armorer") {
@@ -142,7 +142,7 @@ function dialogRoute(id: str) {
     } else if (id.startsWith("t_upgrade_")) {
         smithUpgrade(uuid, id.replace("t_upgrade_", ""));
     } else if (id == "t_words") {
-        libraryPage("");
+        libraryPage(s"");
     } else if (id.startsWith("w_buy_")) {
         libraryBuy(uuid, id.replace("w_buy_", ""));
     } else if (id == "t_rest") {
@@ -154,7 +154,7 @@ function dialogRoute(id: str) {
             default.sendTitle(s" ", s"<gray>You rest and wake refreshed.", 10, 30, 15);
             default.playSound(snd("Villager Celebrate", 1, 1));
         } else {
-            sendBar(uuid, "<red>You can't afford a room.");
+            sendBar(uuid, s"<red>You can't afford a room.");
         }
     } else if (id == "t_bless") {
         global pHp[uuid] = stat(uuid, "maxHp");
@@ -168,7 +168,7 @@ function dialogRoute(id: str) {
     } else if (id == "t_report") {
         questReport(uuid);
     } else if (id == "t_arts") {
-        trainerPage("");
+        trainerPage(s"");
     } else if (id.startsWith("ar_buy_")) {
         trainerBuy(uuid, id.replace("ar_buy_", ""));
     } else if (id == "t_lord") {
@@ -294,7 +294,7 @@ function shopClick(uuid: str, kind: str, idx: num) {
         line g = line goods[idx];
         line price = num.round(itemValue(line g) * line mul);
         if ((pdGet(uuid, "gold") as num) < line price) {
-            sendBar(uuid, "<red>Not enough gold.");
+            sendBar(uuid, s"<red>Not enough gold.");
             default.playSound(snd("Villager No", 1, 1));
         } else {
             giveGold(uuid, 0 - line price);
@@ -334,11 +334,11 @@ function smithRepair(uuid: str) {
     }
     line cost = num.round(line cost * raceMul(playerRace(uuid), "smith"));
     if (line cost == 0) {
-        sendBar(uuid, "<gray>Your gear is in fine shape.");
+        sendBar(uuid, s"<gray>Your gear is in fine shape.");
         return;
     }
     if ((pdGet(uuid, "gold") as num) < line cost) {
-        sendBar(uuid, "<red>Repairs cost %var(cost) gold.");
+        sendBar(uuid, s"<red>Repairs cost %var(cost) gold.");
         return;
     }
     giveGold(uuid, 0 - line cost);
@@ -356,19 +356,19 @@ function smithRepair(uuid: str) {
 /** Raises the rarity of the item in equipment slot sl by one. */
 function smithUpgrade(uuid: str, sl: str) {
     if (equipHas(uuid, sl) == 0) {
-        sendBar(uuid, "<gray>Nothing equipped there.");
+        sendBar(uuid, s"<gray>Nothing equipped there.");
         return;
     }
     line it = equipOf(uuid, sl);
     line r = it.getTag("r") as num;
     if (r >= 6) {
-        sendBar(uuid, "<gold>It can't be improved further.");
+        sendBar(uuid, s"<gold>It can't be improved further.");
         return;
     }
     line m = it.getTag("m") as num;
     line cost = num.round(40 * line m ** 1.4 * (r + 1) ** 2.2 * raceMul(playerRace(uuid), "smith"));
     if ((pdGet(uuid, "gold") as num) < line cost) {
-        sendBar(uuid, "<red>That costs %var(cost) gold.");
+        sendBar(uuid, s"<red>That costs %var(cost) gold.");
         return;
     }
     giveGold(uuid, 0 - line cost);
@@ -395,16 +395,14 @@ function smithUpgrade(uuid: str, sl: str) {
 // ---------------------------------------------------------------- library
 
 /** The library: words for sale (buttons), with their price. */
-function libraryPage(msg: str) {
+function libraryPage(msg: txt) {
     line uuid = default.uuid;
     line known = pdGet(uuid, "words") as list[str];
     line int = stat(uuid, "int");
     line gold = pdGet(uuid, "gold");
-    line d = dialog.create("library", s"<#E080FF><b>Words of Power", type="Multi Action with Exit Button");
+    line d = dialog.create("library", s"<#E080FF><b>Words of Power", type="Multi Action");
     dialog.addBodyText(line d, s"<gray>Gold: <gold>%var(gold)</gold> | Your INT: <aqua>%math(round(%var(int)))</aqua>. Harder words need more INT.");
-    if (msg != "") {
-        dialog.addBodyText(line d, s"%var(msg)");
-    }
+    dialog.addBodyText(line d, msg);
     dialog.setColumnCount(line d, 3);
     line shown = 0;
     for (line w of allWords()) {
@@ -432,30 +430,28 @@ function libraryPage(msg: str) {
 function libraryBuy(uuid: str, w: str) {
     line pr = wordPrice(w);
     if (stat(uuid, "int") < line pr[2]) {
-        libraryPage("<red>You need more INT to grasp that word.");
+        libraryPage(s"<red>You need more INT to grasp that word.");
         return;
     }
     if ((pdGet(uuid, "gold") as num) < line pr[1]) {
-        libraryPage("<red>You can't afford that.");
+        libraryPage(s"<red>You can't afford that.");
         return;
     }
     giveGold(uuid, 0 - line pr[1]);
     learnWord(uuid, w);
     line g = wordData(w)[2] as str;
-    libraryPage("<green>Learned <#E080FF>%var(w)</#E080FF> (%var(g)).");
+    libraryPage(s"<green>Learned <#E080FF>%var(w)</#E080FF> (%var(g)).");
 }
 
 // ---------------------------------------------------------------- trainer
 
-function trainerPage(msg: str) {
+function trainerPage(msg: txt) {
     line uuid = default.uuid;
     line known = pdArts(uuid);
     line gold = pdGet(uuid, "gold");
-    line d = dialog.create("trainer", s"<#FFC83C><b>Weapon Arts", type="Multi Action with Exit Button");
+    line d = dialog.create("trainer", s"<#FFC83C><b>Weapon Arts", type="Multi Action");
     dialog.addBodyText(line d, s"<gray>Gold: <gold>%var(gold)</gold>. Arts go into ability slots (Journal > Weapon Arts).");
-    if (msg != "") {
-        dialog.addBodyText(line d, s"%var(msg)");
-    }
+    dialog.addBodyText(line d, msg);
     dialog.setColumnCount(line d, 2);
     for (line a of allArts()) {
         line ad = artData(line a);
@@ -474,12 +470,12 @@ function trainerPage(msg: str) {
 function trainerBuy(uuid: str, a: str) {
     line known = pdArts(uuid);
     if (line known.find(a) != 0) {
-        trainerPage("<gray>You know that one.");
+        trainerPage(s"<gray>You know that one.");
         return;
     }
     line price = artData(a)[4] as num;
     if ((pdGet(uuid, "gold") as num) < line price) {
-        trainerPage("<red>Come back with more gold.");
+        trainerPage(s"<red>Come back with more gold.");
         return;
     }
     giveGold(uuid, 0 - line price);
@@ -487,5 +483,5 @@ function trainerBuy(uuid: str, a: str) {
     pdSet(uuid, "arts", line known);
     artSet(uuid, a);
     line n = artData(a)[1] as str;
-    trainerPage("<green>You learned <#FFC83C>%var(n)</#FFC83C>.");
+    trainerPage(s"<green>You learned <#FFC83C>%var(n)</#FFC83C>.");
 }

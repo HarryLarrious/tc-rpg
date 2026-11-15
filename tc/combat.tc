@@ -225,7 +225,7 @@ function startAttack(uuid: str, kind: num) {
     if (staminaUse(uuid, line cost) == 0) {
         line step = 1;
         if (kind == 2) {
-            sendBar(uuid, "<red>Too tired!");
+            sendBar(uuid, s"<red>Too tired!");
             return;
         }
     }
@@ -254,7 +254,7 @@ function onDodgeKey {
         return;
     }
     if (staminaUse(uuid, 20) == 0) {
-        sendBar(uuid, "<red>Too tired to roll!");
+        sendBar(uuid, s"<red>Too tired to roll!");
         return;
     }
     // Direction: where the keys push, or backwards.
@@ -553,6 +553,11 @@ function meleeStrike(uuid: str) {
                     line crit = 1;
                     line dmg = line dmg * 1.75;
                 }
+                if (global pBackstab.hasKeys(uuid) && global pBackstab[uuid] > now()) {
+                    line crit = 1;
+                    line dmg = line dmg * 3;
+                    global pBackstab[uuid] = 0;
+                }
                 hitEnemy(line id, line dmg, line crit, line feet, 0.35 + (md[16] as num) * 0.15, uuid, "phys");
                 line hits += 1;
                 lifesteal(uuid, line dmg);
@@ -622,7 +627,7 @@ function durabilityUse(uuid: str, n: num) {
     line e["main"] = it.setTag("dur", line d);
     pdSet(uuid, "equip", line e);
     if (line d == 0 && (it.getTag("dur") as num) > 0) {
-        sendBar(uuid, "<red>Your weapon broke! Repair it at a blacksmith.");
+        sendBar(uuid, s"<red>Your weapon broke! Repair it at a blacksmith.");
     }
 }
 
@@ -678,7 +683,7 @@ function playerHurt(uuid: str, dmg: num, from: vec, elem: str): num {
     }
     line feet = bodyFeet(uuid);
     if (now() < global pIframe[uuid]) {
-        fxText(line feet + vec(0, 2.2, 0), "<aqua>Dodged!", 1);
+        fxText(line feet + vec(0, 2.2, 0), s"<aqua>Dodged!", 1);
         return 0;
     }
     line d = dmg * 100 / (100 + stat(uuid, "armor") * 4);
@@ -691,7 +696,7 @@ function playerHurt(uuid: str, dmg: num, from: vec, elem: str): num {
             line toV = vec(from.x - line feet.x, 0, from.z - line feet.z);
             if (line toV.len() > 0.1 && line toV.setLength(1).dot(yawFwd(global pYaw[uuid])) > 0.3 && staminaUse(uuid, 10) == 1) {
                 line d = line d * (1 - (equipOf(uuid, "off").getTag("d") as num) / 10);
-                fxText(line feet + vec(0, 2.2, 0), "<gray>Blocked", 1);
+                fxText(line feet + vec(0, 2.2, 0), s"<gray>Blocked", 1);
             }
         }
     }
@@ -703,7 +708,7 @@ function playerHurt(uuid: str, dmg: num, from: vec, elem: str): num {
     global pHp[uuid] = global pHp[uuid] - line d;
     global pRegenAt[uuid] = now() + 60;
     global pShake[uuid] = 0.35;
-    fxText(line feet + vec(0, 2.3, 0), "<red>-%var(d)", 0);
+    fxText(line feet + vec(0, 2.3, 0), s"<red>-%var(d)", 0);
     line push = vec(line feet.x - from.x, 0, line feet.z - from.z);
     if (line push.len() > 0.05) {
         line push = line push.setLength(0.35);
@@ -762,16 +767,16 @@ function respawnPoint(): loc {
 }
 
 /** Action-bar message to player uuid (shown over the HUD for a while). */
-declare global pBarMsg: dict[str];
+declare global pBarMsg: dict[txt];
 declare global pBarUntil: dict[num];
 
-function sendBar(uuid: str, msg: str) {
+function sendBar(uuid: str, msg: txt) {
     global pBarMsg[uuid] = msg;
     global pBarUntil[uuid] = now() + 40;
 }
 
 /** Extra text for the HUD: a recent message or the lock-on target. */
-function hudExtra(uuid: str): str {
+function hudExtra(uuid: str): txt {
     if (global pBarUntil.hasKeys(uuid) && now() < global pBarUntil[uuid]) {
         return global pBarMsg[uuid];
     }
@@ -779,7 +784,7 @@ function hudExtra(uuid: str): str {
     if (line tgt != "") {
         return enemyHudLine(line tgt);
     }
-    return "";
+    return s"";
 }
 
 // ---------------------------------------------------------------- lock-on
@@ -807,7 +812,7 @@ function lockOnClear(uuid: str) {
 function lockOnToggle(uuid: str) {
     if (lockOnTarget(uuid) != "") {
         lockOnClear(uuid);
-        sendBar(uuid, "<gray>Lock released");
+        sendBar(uuid, s"<gray>Lock released");
         return;
     }
     line feet = bodyFeet(uuid);
@@ -823,7 +828,7 @@ function lockOnToggle(uuid: str) {
         }
     }
     if (line best == "") {
-        sendBar(uuid, "<gray>No enemy to lock on to");
+        sendBar(uuid, s"<gray>No enemy to lock on to");
         return;
     }
     global pLock[uuid] = line best;

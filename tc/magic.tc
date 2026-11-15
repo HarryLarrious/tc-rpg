@@ -322,7 +322,7 @@ declare global familiars: list[dict];
 function castStart(uuid: str, sp: dict, costMul: num) {
     if (sp.hasKeys("err")) {
         line e = sp["err"] as str;
-        sendBar(uuid, "<red>%var(e)");
+        sendBar(uuid, s"<red>%var(e)");
         return;
     }
     line a = global pAct[uuid];
@@ -331,7 +331,7 @@ function castStart(uuid: str, sp: dict, costMul: num) {
     }
     line cost = num.round((sp["cost"] as num) * costMul);
     if (manaUse(uuid, line cost) == 0) {
-        sendBar(uuid, "<#4AA3FF>Not enough mana (%var(cost))");
+        sendBar(uuid, s"<#4AA3FF>Not enough mana (%var(cost))");
         return;
     }
     global pCasting[uuid] = sp;
@@ -402,7 +402,7 @@ function spellExec(owner: str, sp: dict, origin: vec, aim: vec) {
             if ((bodyFeet(line uuid) - feet).len() < 6 * size) {
                 global pHp[line uuid] = num.min(stat(line uuid, "maxHp"), global pHp[line uuid] + line heal);
                 global pPoison[line uuid] = 0;
-                fxText(bodyFeet(line uuid) + vec(0, 2.2, 0), "<#7AFF9A>+%math(round(%var(heal)))", 0);
+                fxText(bodyFeet(line uuid) + vec(0, 2.2, 0), s"<#7AFF9A>+%math(round(%var(heal)))", 0);
                 fxBurst(bodyFeet(line uuid) + vec(0, 1, 0), "life", 0.7);
             }
         }
@@ -448,7 +448,7 @@ function spellExec(owner: str, sp: dict, origin: vec, aim: vec) {
         global pWard[owner] = line amt;
         global pWardUntil[owner] = now() + num.round(200 * (sp["dur"] as num));
         fxExpandRing(feet + vec(0, 1, 0), 1.4, color);
-        sendBar(owner, "<#9EE8FF>Ward: %math(round(%var(amt)))");
+        sendBar(owner, s"<#9EE8FF>Ward: %math(round(%var(amt)))");
         if (elem != "arcane" && elem != "life") {
             zoneAdd({kind: "aura", owner: owner, pos: feet, r: 2.5 * size, until: global pWardUntil[owner], next: 0, sp: sp});
         }
@@ -726,7 +726,7 @@ function spawnFamiliar(owner: str, sp: dict) {
     lastEntity.setDisplayTeleportDuration(3);
     rigSetMatrix(line id, basisMatrix(vec(1, 0, 0), vec(0, 1, 0), vec(0, 0, 1), 0.6, 0.6, 0.6, vec(0, 0, 0)), 0);
     global familiars.append({id: line id, owner: owner, until: now() + num.round(300 * (sp["dur"] as num)), next: now() + 20, sp: line inner});
-    sendBar(owner, "<#E080FF>A familiar answers your call.");
+    sendBar(owner, s"<#E080FF>A familiar answers your call.");
 }
 
 /** Familiars orbit their caster and cast at the nearest enemy. */
@@ -817,10 +817,10 @@ playerevent chat {
     }
     event.cancel();
     if (equipSlotCounts(line uuid)[1] == 0) {
-        sendBar(line uuid, "<red>You need a staff or wand to channel words.");
+        sendBar(line uuid, s"<red>You need a staff or wand to channel words.");
         return;
     }
     line sp = spellCompile(line uuid, line msg, 1);
-    fxText(bodyFeet(line uuid) + vec(0, 2.6, 0), "<#E080FF><i>%var(msg)", 0);
+    fxText(bodyFeet(line uuid) + vec(0, 2.6, 0), s"<#E080FF><i>%var(msg)", 0);
     castStart(line uuid, line sp, 1.5);
 }
