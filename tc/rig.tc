@@ -30,7 +30,7 @@ function appDefault(): dict {
     return {
         race: "human", build: "m", scale: 1,
         skin: 0xE0AC85, hair: 0x5A3A22, eye: 0x3C6E9E, cloth: 0x8A6A45, pants: 0x4E4234, horn: 0x2B2420,
-        hairStyle: "short", ears: "human", beard: "", tail: "",
+        hairStyle: "short", ears: "human", beard: "", tail: "", arms: "classic",
         armor: {head: ["", 0, 0], torso: ["", 0, 0], arm: ["", 0, 0], leg: ["", 0, 0]},
         main: "", off: ""
     };
@@ -39,6 +39,22 @@ function appDefault(): dict {
 /** Helmets that cover the hair. */
 function helmHidesHair(kind: str): num {
     if (kind == "chain" || kind == "scale" || kind == "plate" || kind == "bone" || kind == "ranger") {
+        return 1;
+    }
+    return 0;
+}
+
+/** 1 when appearance app has slim arms. Appearances from before the
+ * choice existed: slim for the feminine builds. */
+function appSlim(app: dict): num {
+    line a = app["arms"];
+    if (line a == "slim") {
+        return 1;
+    }
+    if (line a == "classic") {
+        return 0;
+    }
+    if ((app["build"] as str).endsWith("f")) {
         return 1;
     }
     return 0;
@@ -56,6 +72,9 @@ function rigPartItem(app: dict, part: str): item {
     line main = line armor[2] as num;
     line trim = line armor[3] as num;
     line b = app["build"] as str;
+    if (part == "arm" && appSlim(app) == 1) {
+        line b = "%var(b)s";
+    }
     line strs: list[str] = [line b, line kind];
     if (part == "head") {
         line hs = app["hairStyle"] as str;
@@ -251,11 +270,11 @@ function rigRender(rid: str, yaw: num, pose: list[num]): vec {
     line up = num.max(0.3, 1 + pose[6] / 100);
     line q = vec(1 / line up ** 0.5, line up, global rigRideY);
 
-    // Root frame from the yaw. Bob and fwd are keyed for hips 11 px up.
+    // Root frame from the yaw. Bob and fwd are keyed for hips 12 px up.
     line L = vec(num.cos(yaw), 0, num.sin(yaw));
     line U = vec(0, 1, 0);
     line F = vec(0 - num.sin(yaw), 0, num.cos(yaw));
-    line kb = line hipY / 11 * line px;
+    line kb = line hipY / 12 * line px;
     line hip = vec(0, 0 - global rigRideY, 0) + U * (pose[4] * line kb + line hipY * line px) + F * (pose[5] * line kb);
     // Whole body about the hips: turn, pitch forward, roll to its left.
     if (pose[2] != 0) {
@@ -285,7 +304,11 @@ function rigRender(rid: str, yaw: num, pose: list[num]): vec {
     // body. The hand holds its item `grip` px down the arm.
     line shoulder = line hip + line tu * ((line rb[5] - line hipY) * line px);
     line grip = line rb[7] * line px;
-    line shR = line shoulder - line ta * (line rb[4] * line px);
+    line sx = line rb[4] * line px;
+    if (appSlim(line app) == 1) {
+        line sx = line rb[10] * line px;
+    }
+    line shR = line shoulder - line ta * line sx;
     line ar = basisRot(line ta, line tu, line tf, pose[13], pose[14], 0 - pose[15]);
     rigSetMatrix(line ids[3], rigMatrix(line ar[1], line ar[2], line ar[3], line s, line shR, line q), line interp);
     line gripR = line shR - (line ar[2] as vec) * line grip;
@@ -294,7 +317,7 @@ function rigRender(rid: str, yaw: num, pose: list[num]): vec {
     line wb = basisRot(line ar[1], line ar[3], (line ar[2] as vec) * -1, pose[23], pose[24], pose[25]);
     rigSetMatrix(line ids[7], rigMatrix(line wb[1], line wb[2], line wb[3], line s, line gripR, line q), line interp);
 
-    line shL = line shoulder + line ta * (line rb[4] * line px);
+    line shL = line shoulder + line ta * line sx;
     line al = basisRot(line ta, line tu, line tf, pose[16], pose[17], pose[18]);
     line ik = global rigIk[rid];
     line os = line s;

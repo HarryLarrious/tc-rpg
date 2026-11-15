@@ -2,15 +2,15 @@
 // Rig joints per build in model pixels (1/16 block at scale 1), feet at y 0.
 
 /** Per build: [hipY, hipX, neckY, shoulderX, shoulderY, armLength, grip
- * (shoulder to hand), legLength, torsoDepth]. */
+ * (shoulder to hand), legLength, torsoDepth, shoulderX of slim arms]. */
 declare global rigBuild: dict[list];
 
 function loadRigData {
     global rigBuild = {};
-    global rigBuild["m"] = [11, 2, 22, 6, 20, 11, 7.5, 11, 4.5];
-    global rigBuild["f"] = [11, 1.8, 22, 5.25, 20, 11, 7.5, 11, 4];
-    global rigBuild["dm"] = [7, 2.5, 17, 7, 15, 9, 5.5, 7, 6];
-    global rigBuild["df"] = [7, 2.25, 17, 6.25, 15, 9, 5.5, 7, 5.5];
+    global rigBuild["m"] = [12, 2, 24, 6, 22, 12, 8.5, 12, 4, 5.5];
+    global rigBuild["f"] = [12, 1.9, 24, 5.8, 22, 12, 8.5, 12, 4, 5.3];
+    global rigBuild["dm"] = [8, 2.5, 19, 7.25, 17, 10, 6.5, 8, 6, 6.75];
+    global rigBuild["df"] = [8, 2.25, 19, 6.75, 17, 10, 6.5, 8, 5.5, 6.25];
 }
 
 /** Option lists for the character designer. */

@@ -52,8 +52,11 @@ DiamondFire cannot force the F5 camera, so the game builds its own:
 
 Every character (players and NPCs) is 6 body-part item displays plus 2
 held-item displays: head, torso, two arms and two legs. The style is
-stylized and blocky: one-piece limbs, a big square head with a cartoon face
-(no nose) and flat, paper-thin ears. Each part item uses one item model
+blocky with classic proportions (an 8 px head, 12 px torso, arms and legs
+for the tall builds): one-piece limbs, a plain face (no nose) and flat,
+paper-thin ears. Arms are classic (4 px) or slim (3 px), a choice in the
+character designer (`app["arms"]`; the arm item's build string gets an `s`
+for slim). Each part item uses one item model
 (`rpg:body/<part>`: head, torso, arm, leg) that is a **composite** of layers
 picked by the item's custom model data strings and colored by its custom
 model data colors:

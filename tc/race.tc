@@ -132,6 +132,10 @@ function appRandom(r: str, h: num): dict {
     line hairs = rigOptions("hair");
     app["race"] = r;
     app["build"] = raceBuild(r, line sex);
+    app["arms"] = "classic";
+    if (line sex == "f") {
+        app["arms"] = "slim";
+    }
     app["scale"] = raceScale(r) * (0.95 + (h % 11) / 100);
     app["skin"] = line skins[1 + num.floor(h / 3) % line skins.len()];
     app["hair"] = line hc[1 + num.floor(h / 7) % 8];

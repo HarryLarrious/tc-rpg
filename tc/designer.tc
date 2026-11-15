@@ -79,6 +79,11 @@ function designerDialog(msg: txt) {
     }
     dialog.addOptionInput(line d, "race", s"Race", 220, race, raceIds(), line rl);
     dialog.addOptionInput(line d, "sex", s"Body", 220, line sex, ["m", "f"], [s"Masculine", s"Feminine"]);
+    line arms = "classic";
+    if (appSlim(app) == 1) {
+        line arms = "slim";
+    }
+    dialog.addOptionInput(line d, "arms", s"Arms", 220, line arms, ["classic", "slim"], [s"Classic", s"Slim"]);
     line base = raceScale(race);
     dialog.addNumberInput(line d, "height", s"Height", 0.9, 1.1, (app["scale"] as num) / line base, 0.01, 220);
     line hs: list[str] = ["none"];
@@ -130,6 +135,7 @@ function designerApply {
     line oldRace = app["race"] as str;
     line app["race"] = race;
     line app["build"] = raceBuild(race, sex);
+    line app["arms"] = game.getDialogText("arms");
     line app["scale"] = raceScale(race) * game.getDialogNumber("height");
     line h = game.getDialogText("hair");
     if (h == "none") {

@@ -125,11 +125,12 @@ FACES = ("north", "south", "east", "west", "up", "down")
 class Model:
     """A block model built from boxes, in model pixels around the pivot."""
 
-    def __init__(self, k: float = 1.0) -> None:
-        """k scales every coordinate (0.5: half-size pixels for long items)."""
+    def __init__(self, k=1.0) -> None:
+        """k scales every coordinate (0.5: half-size pixels for long items),
+        or each axis apart when it is an (x, y, z) tuple."""
         self.elements: list[dict] = []
         self.textures: dict[str, str] = {}
-        self.k = k
+        self.k = tuple(k) if isinstance(k, (tuple, list)) else (k, k, k)
         self.display: dict = {}
 
     def tex(self, tex_id: str) -> str:
@@ -145,8 +146,8 @@ class Model:
         """Adds the box from corner a to corner b. rot = (axis, angle,
         origin) for one axis, or ("xyz", (x, y, z), origin) for Euler angles
         (applied X, then Y, then Z, right-handed, about origin)."""
-        a = [x * self.k for x in a]
-        b = [x * self.k for x in b]
+        a = [x * self.k[i] for i, x in enumerate(a)]
+        b = [x * self.k[i] for i, x in enumerate(b)]
         lo = [min(a[i], b[i]) for i in range(3)]
         hi = [max(a[i], b[i]) for i in range(3)]
         key = self.tex(tex)
@@ -172,7 +173,7 @@ class Model:
         el = {"from": [rnd(x + 8) for x in lo], "to": [rnd(x + 8) for x in hi], "faces": fd}
         if rot is not None:
             axis, angle, origin = rot
-            org = [rnd(o * self.k + 8) for o in origin]
+            org = [rnd(o * self.k[i] + 8) for i, o in enumerate(origin)]
             if axis == "xyz":
                 el["rotation"] = {"x": rnd(angle[0]), "y": rnd(angle[1]), "z": rnd(angle[2]), "origin": org}
             else:

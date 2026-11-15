@@ -38,15 +38,16 @@ export function basisRot(a, b, c, p, y, r) {
 export const squash = sq => { const up = Math.max(0.3, 1 + sq / 100); return [1 / Math.sqrt(up), up]; };
 
 /** Poses the rig. build: rig_data build entry; pose: {channel: value}; ik:
- * left-hand offset along a two-handed weapon (px) or null. Returns
+ * left-hand offset along a two-handed weapon (px) or null; slim: slim arms. Returns
  * {parts: {name: {a, b, c, t, s}}, joints: [[x,y,z]...], grip}. */
-export function rigPose(build, scale, pose, ik = null) {
+export function rigPose(build, scale, pose, ik = null, slim = false) {
+  if (slim) build = { ...build, sx: build.sxs };
   const s = scale * 0.9, px = s / 16;
   const P = k => pose[k] || 0;
   let L = v(1, 0, 0), U = v(0, 1, 0), F = v(0, 0, 1);
-  // Bob and fwd are keyed for build m (hips 11 px up): scale them to the
+  // Bob and fwd are keyed for build m (hips 12 px up): scale them to the
   // build's legs.
-  const k = build.hip / 11;
+  const k = build.hip / 12;
   const hip = add(mul(U, (P("bob") * k + build.hip) * px), mul(F, P("fwd") * k * px));
   // Whole body about the hips: turn, then pitch forward, then roll left.
   if (P("root_y")) { L = rotAround(L, U, P("root_y")); F = rotAround(F, U, P("root_y")); }

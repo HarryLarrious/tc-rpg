@@ -235,7 +235,7 @@ function partStrings(item) {
   const b = $("build").value;
   const slot = item;
   const armor = $("a_" + slot).value;
-  const s = [b, armor];
+  const s = [item === "arm" && $("arms").value === "slim" ? b + "s" : b, armor];
   if (item === "head") {
     let hs = $("hairStyle").value, ears = $("ears").value;
     if (HIDES_HAIR.includes(armor)) { hs = ""; if (ears === "human" || ears === "elf") ears = ""; }
@@ -282,7 +282,7 @@ async function rebuild() {
 
 // ------------------------------------------------------------- hash state
 
-const KEYS = ["stripView", "mode", "clip", "stance", "speed", "rate", "time", "ticks", "build", "hairStyle", "ears", "beard", "tail", "scale",
+const KEYS = ["stripView", "mode", "clip", "stance", "speed", "rate", "time", "ticks", "build", "arms", "hairStyle", "ears", "beard", "tail", "scale",
   "skin", "hair", "eye", "cloth", "pants", "horn", "a_head", "a_torso", "a_arm", "a_leg", "am", "at", "main", "off", "variant", "single"];
 function readHash() {
   const q = new URLSearchParams(location.hash.slice(1));
@@ -325,7 +325,7 @@ $("top3").onclick = () => setCam("q");
 $("reload").onclick = loadData;
 for (const k of KEYS) {
   const el = $(k);
-  const rebuildKeys = ["build", "hairStyle", "ears", "beard", "tail", "skin", "hair", "eye", "cloth", "pants", "horn",
+  const rebuildKeys = ["build", "arms", "hairStyle", "ears", "beard", "tail", "skin", "hair", "eye", "cloth", "pants", "horn",
     "a_head", "a_torso", "a_arm", "a_leg", "am", "at", "main", "off", "variant", "single"];
   el.addEventListener(el.tagName === "SELECT" ? "change" : "input", () => {
     if (rebuildKeys.includes(k)) rebuild();
@@ -377,7 +377,7 @@ function ikOffset() {
 
 function applyPose(poseArr, groups = partGroups) {
   const build = rigData.builds[$("build").value];
-  const res = rigPose(build, +$("scale").value, toDict(anim, poseArr), ikOffset());
+  const res = rigPose(build, +$("scale").value, toDict(anim, poseArr), ikOffset(), $("arms").value === "slim");
   for (const p of PARTS) {
     const { a, b, c, t, s } = res.parts[p];
     const k = s / 16;
@@ -405,7 +405,7 @@ function drawTrail() {
   const build = rigData.builds[$("build").value];
   const pts = [];
   for (let i = 0; i <= 60; i++) {
-    const r = rigPose(build, +$("scale").value, toDict(anim, currentPose(i / 60)));
+    const r = rigPose(build, +$("scale").value, toDict(anim, currentPose(i / 60)), null, $("arms").value === "slim");
     const m = r.parts.main;
     // The tip of a 14 px blade (weapons are half-size pixels).
     const L = 14 * m.s / 16;

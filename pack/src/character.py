@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """The character rig: body parts, clothes, armor, hair, ears, beards, tails.
 
-The look is stylized and blocky: one-piece arms and legs, a big square head,
-a cartoon face (no nose) and flat, paper-thin ears. Every character is six
+The look is stylized and blocky, with classic proportions: one-piece arms
+(classic or slim) and legs, an 8 px head with a simple face (no nose) and
+flat, paper-thin ears. Every character is six
 item displays: head, torso, two arms, two legs. Each part's item model
 (rpg:body/<part>) is a composite whose layers are picked by the item's
 custom model data strings and tinted by its colors (see PLAN.md,
@@ -33,16 +34,22 @@ SKIN, HAIR, EYE, CLOTH, ARM_MAIN, ARM_TRIM, HORN, PANTS = range(8)
 # Per build, in model pixels (16 per block at scale 1; feet at y 0):
 #   hip      height of the hip joints; hx: their x
 #   tw/td    torso width and depth; neck: height of the torso's top
-#   sx/sy    shoulder joint x and height (the arm's top is 2 px above it)
-#   aw/al    arm thickness and length; grip: shoulder to the hand's center
+#   sy       shoulder joint height (the arm's top is 2 px above it); sx/sxs
+#            its x for classic and slim arms (derived)
+#   aw/aws   classic and slim arm thickness; al arm length; grip: shoulder
+#            to the hand's center (derived)
 #   lw/ll    leg thickness and length (hip joint to the sole)
 BUILDS = {
-    "m": dict(hip=11, hx=2.0, tw=8, td=4.5, neck=22, sx=6.0, sy=20, aw=4.0, al=11, lw=4.0, ll=11, bust=False),
-    "f": dict(hip=11, hx=1.8, tw=7, td=4.0, neck=22, sx=5.25, sy=20, aw=3.5, al=11, lw=3.6, ll=11, bust=True),
-    "dm": dict(hip=7, hx=2.5, tw=10, td=6.0, neck=17, sx=7.0, sy=15, aw=4.0, al=9, lw=5.0, ll=7, bust=False),
-    "df": dict(hip=7, hx=2.25, tw=9, td=5.5, neck=17, sx=6.25, sy=15, aw=3.5, al=9, lw=4.5, ll=7, bust=True),
+    "m": dict(hip=12, hx=2.0, tw=8, td=4.0, neck=24, sy=22, aw=4.0, aws=3.0, al=12, lw=4.0, ll=12, bust=False),
+    "f": dict(hip=12, hx=1.9, tw=7.6, td=4.0, neck=24, sy=22, aw=4.0, aws=3.0, al=12, lw=3.8, ll=12, bust=True),
+    "dm": dict(hip=8, hx=2.5, tw=10, td=6.0, neck=19, sy=17, aw=4.5, aws=3.5, al=10, lw=5.0, ll=8, bust=False),
+    "df": dict(hip=8, hx=2.25, tw=9, td=5.5, neck=19, sy=17, aw=4.5, aws=3.5, al=10, lw=4.5, ll=8, bust=True),
 }
 for _b in BUILDS.values():
+    # Shoulder joints sit where the arm's inner face meets the torso, for
+    # classic (aw) and slim (aws) arms.
+    _b["sx"] = _b["tw"] / 2 + _b["aw"] / 2
+    _b["sxs"] = _b["tw"] / 2 + _b["aws"] / 2
     _b["grip"] = _b["al"] - 3.5
 
 ARMORS = ["leather", "chain", "scale", "plate", "robe", "ranger", "noble", "bone"]
@@ -51,9 +58,12 @@ EARS = ["human", "elf", "cat", "wolf", "bear", "rabbit", "demon"]
 BEARDS = ["stubble", "short", "full", "long", "braided", "goatee", "mustache"]
 TAILS = ["cat", "wolf", "bear", "rabbit", "demon"]
 
-# The head: x -HX..HX, y 0..HY (the neck joint at the origin), z -HZ..HZ,
-# the face on +Z.
+# The head is 8 x 8 x 8 px, the neck joint at the bottom center, the face
+# on +Z. Hair, ears, beards and helmets are drawn around a 9 x 8.5 x 8.5
+# design head (x -HX..HX, y 0..HY, z -HZ..HZ) and scaled down to it by
+# HEAD_K.
 HX, HY, HZ = 4.5, 8.5, 4.25
+HEAD_K = (8 / 9, 8 / 8.5, 8 / 8.5)
 FRONT = ("south",)  # decals only need the face toward +Z
 FLAT = 0.15  # thickness of the flat (2D) ears
 
@@ -63,8 +73,8 @@ T: dict[str, str] = {}
 def textures():
     for kind in ("skin", "cloth", "leather", "metal", "chain", "hair", "fur", "dark", "white", "bone"):
         T[kind] = make_texture(f"body_{kind}", kind)
-    T["mouth"] = make_texture("body_mouth", "dark", rgb=(120, 52, 52))
-    T["blush"] = make_texture("body_blush", "skin", rgb=(255, 176, 176))
+    T["lip"] = make_texture("body_lip", "skin", rgb=(176, 120, 116))
+    T["lid"] = make_texture("body_lid", "skin", rgb=(150, 120, 110))
     T["boot"] = make_texture("body_boot", "leather", rgb=(104, 70, 44))
     T["sole"] = make_texture("body_sole", "leather", rgb=(52, 38, 28))
     T["belt"] = make_texture("body_belt", "leather", rgb=(70, 48, 30))
@@ -85,35 +95,29 @@ def xs(side: float, a: float, b: float) -> tuple[float, float]:
 def head_base(female: bool = False) -> Model:
     m = Model()
     s = T["skin"]
-    m.box((-HX, 0, -HZ), (HX, HY, HZ), s, SKIN)
+    m.box((-4, 0, -4), (4, 8, 4), s, SKIN)
     m.box((-1.8, -1.5, -1.6), (1.8, 0.2, 1.6), s, SKIN)
-    z = HZ
+    z = 4.0
     for side in (1, -1):
-        # Eyes: a tall colored iris, a dark pupil and a glint (the glint on
-        # the same side of both eyes, as if lit from one side).
-        x0, x1 = xs(side, 0.9, 2.8)
-        m.box((x0, 3.1, z), (x1, 5.6, z + 0.05), T["white"], EYE, faces=FRONT)
-        p0, p1 = xs(side, 1.4, 2.3)
-        m.box((p0, 3.3, z + 0.05), (p1, 4.9, z + 0.08), T["dark"], faces=FRONT)
-        gx = side * 1.85
-        m.box((gx - 0.05, 4.6, z + 0.08), (gx + 0.55, 5.2, z + 0.1), T["white"], faces=FRONT)
-        # Brows (hair colored), arched on the female face.
-        b0, b1 = xs(side, 0.8, 3.0)
-        tilt = side * (7 if female else -5)
-        m.box((b0, 6.05, z), (b1, 6.6, z + 0.09), T["brow"], HAIR, faces=FRONT,
-              rot=("z", tilt, (side * 1.9, 6.3, z)))
+        # Eyes: white with the colored iris on the inner half and a dark
+        # pupil in it; a lid line above.
+        x0, x1 = xs(side, 0.9, 2.9)
+        m.box((x0, 3.1, z), (x1, 4.5, z + 0.04), T["white"], faces=FRONT)
+        i0, i1 = xs(side, 0.9, 2.0)
+        m.box((i0, 3.1, z + 0.04), (i1, 4.5, z + 0.07), T["white"], EYE, faces=FRONT)
+        p0, p1 = xs(side, 1.15, 1.75)
+        m.box((p0, 3.35, z + 0.07), (p1, 4.15, z + 0.1), T["dark"], faces=FRONT)
+        m.box((x0, 4.45, z + 0.04), (x1, 4.7, z + 0.1), T["lid"], SKIN, faces=FRONT)
+        # Brows, level (a touch of arch on the female face).
+        b0, b1 = xs(side, 0.7, 3.0)
+        tilt = side * 4 if female else 0
+        m.box((b0, 5.2, z), (b1, 5.7 if female else 5.8, z + 0.09), T["brow"], HAIR, faces=FRONT,
+              rot=("z", tilt, (side * 1.85, 5.45, z)) if tilt else None)
         if female:
-            l0, l1 = xs(side, 0.8, 3.15)
-            m.box((l0, 5.35, z + 0.08), (l1, 5.75, z + 0.11), T["dark"], faces=FRONT)
-            k0, k1 = xs(side, 2.95, 3.5)
-            m.box((k0, 5.55, z + 0.08), (k1, 6.0, z + 0.11), T["dark"], faces=FRONT)
-            c0, c1 = xs(side, 2.7, 4.0)
-            m.box((c0, 2.5, z), (c1, 3.1, z + 0.03), T["blush"], SKIN, faces=FRONT)
-    # A small smile.
-    m.box((-0.9, 1.6, z), (0.9, 2.0, z + 0.06), T["mouth"], faces=FRONT)
-    for side in (1, -1):
-        c0, c1 = xs(side, 0.9, 1.35)
-        m.box((c0, 1.9, z), (c1, 2.35, z + 0.06), T["mouth"], faces=FRONT)
+            l0, l1 = xs(side, 2.4, 3.3)
+            m.box((l0, 4.4, z + 0.09), (l1, 4.75, z + 0.12), T["dark"], faces=FRONT)
+    # A plain, closed mouth.
+    m.box((-1.2, 1.55, z), (1.2, 1.9, z + 0.05), T["lip"], SKIN, faces=FRONT)
     return m
 
 
@@ -139,7 +143,7 @@ def fringe(m: Model, cols, tilt: float = 0.0):
 
 
 def hair(style: str) -> Model:
-    m = Model()
+    m = Model(HEAD_K)
     h = T["hair"]
     W = HX + 0.45
     if style == "short":
@@ -244,7 +248,7 @@ def flat(m: Model, x0, x1, y0, y1, z, tex, tint, rot=None, dz: float = 0.0):
 
 
 def ears(kind: str) -> Model:
-    m = Model()
+    m = Model(HEAD_K)
     s, f, inner = T["skin"], T["fur"], T["inner"]
     if kind == "human":
         for side in (1, -1):
@@ -296,7 +300,7 @@ def ears(kind: str) -> Model:
 
 
 def beard(kind: str) -> Model:
-    m = Model()
+    m = Model(HEAD_K)
     h = T["hair"]
     z = HZ
 
@@ -335,7 +339,7 @@ def beard(kind: str) -> Model:
 
 
 def helmet(kind: str) -> Model:
-    m = Model()
+    m = Model(HEAD_K)
     met, lea, clo = T["metal"], T["leather"], T["cloth"]
     O = 0.5
     X, Z = HX + O, HZ + O
@@ -525,7 +529,8 @@ def tail(kind: str, b: dict) -> Model:
 
 # ---------------------------------------------------------------- limbs
 #
-# Arm frame: the shoulder joint at the origin, the arm's top 2 px above it,
+# Arm frame (classic or slim: b["aw"] is the thickness): the shoulder joint
+# at the origin, the arm's top 2 px above it,
 # hanging along -Y; the hand is the bottom 3 px and a held item sits at
 # -grip. Leg frame: the hip joint at the origin, the sole at -ll, toes
 # toward +Z.
@@ -646,8 +651,17 @@ PARTS = {
     "leg": (leg_base, leg_armor),
 }
 
+
+def variants(part: str):
+    """(case key, build) pairs of a part's models: arms come classic (key
+    <build>) and slim (key <build>s)."""
+    for bid, b in BUILDS.items():
+        yield bid, b
+        if part == "arm":
+            yield bid + "s", dict(b, aw=b["aws"])
+
 # rig_data order (tc/rig.tc reads these by index).
-RIG_KEYS = ["hip", "hx", "neck", "sx", "sy", "al", "grip", "ll", "td"]
+RIG_KEYS = ["hip", "hx", "neck", "sx", "sy", "al", "grip", "ll", "td", "sxs"]
 
 
 def main() -> None:
@@ -669,7 +683,7 @@ def main() -> None:
 
     for part, (base_fn, armor_fn) in PARTS.items():
         cases = {}
-        for bid, b in BUILDS.items():
+        for bid, b in variants(part):
             layers = [n(base_fn(b), f"body/{bid}/{part}"),
                       select_node(1, {k: n(armor_fn(k, b), f"body/{bid}/{part}_{k}") for k in ARMORS})]
             if part == "torso":
@@ -693,7 +707,7 @@ def main() -> None:
         "// Rig joints per build in model pixels (1/16 block at scale 1), feet at y 0.",
         "",
         "/** Per build: [hipY, hipX, neckY, shoulderX, shoulderY, armLength, grip",
-        " * (shoulder to hand), legLength, torsoDepth]. */",
+        " * (shoulder to hand), legLength, torsoDepth, shoulderX of slim arms]. */",
         "declare global rigBuild: dict[list];",
         "",
         "function loadRigData {",
