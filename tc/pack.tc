@@ -2,7 +2,7 @@
 
 /** The published pack (tools/build_pack.py --publish prints it). */
 function packUrl(): str {
-    return "https://raw.githubusercontent.com/HarryLarrious/tc-rpg/pack-dist/rpg-pack-386c16298688.zip"; // pack url
+    return "https://raw.githubusercontent.com/HarryLarrious/tc-rpg/pack-dist/rpg-pack-31d7534e6009.zip"; // pack url
 }
 
 /** Sends the resource pack to the player. */
