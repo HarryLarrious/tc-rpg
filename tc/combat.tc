@@ -1,0 +1,831 @@
+// Player combat: light-attack combos, heavy attacks, dodge rolls, bows,
+// getting hurt and dying (PLAN.md, "Camera and the player's body").
+//
+// An action runs for a number of ticks and drives the pose (actionPose),
+// the body's movement (actionMove) and, at its strike frame, the hit.
+
+/** Per player: current action ("" idle, atk, heavy, dodge, cast, hurt,
+ * dead, draw, shoot, ability), ticks into it and its length. */
+declare global pAct: dict[str];
+declare global pActT: dict[num];
+declare global pActLen: dict[num];
+/** Per player: combo step of the current/last light attack, and the tick
+ * until which a click continues the combo. */
+declare global pCombo: dict[num];
+declare global pComboUntil: dict[num];
+/** Per player: a click queued during an action (1 light, 2 heavy). */
+declare global pQueue: dict[num];
+/** Per player: invulnerable until this tick (dodge), hitstop until tick. */
+declare global pIframe: dict[num];
+declare global pStop: dict[num];
+/** Per player: 1 once the current action's strike happened. */
+declare global pStruck: dict[num];
+/** Per player: extra velocity of the current action (lunges, rolls). */
+declare global pPush: dict[vec];
+/** Per player: camera shake strength. */
+declare global pShake: dict[num];
+/** Per player: the ability or spell slot being used by "ability"/"cast". */
+declare global pActSlot: dict[num];
+/** Per player: damage buff multiplier and the tick it ends. */
+declare global pBuff: dict[num];
+declare global pBuffUntil: dict[num];
+
+/** Animation class of weapon type t. */
+function animClass(t: str): str {
+    if (t == "fist") {
+        return "fist";
+    }
+    return wtData(t)[9] as str;
+}
+
+/** Move data of class cls, step (1-3 light, 4 heavy): [length ticks at
+ * speed 1, armP0, armOut0, wpnP0, torsoY0, armP1, armOut1, wpnP1, torsoY1,
+ * torsoP1, arc (half-angle deg), reach mul, lunge, two-handed, slash plane
+ * (0 flat, 1 upright, 2 thrust), damage mul]. */
+function moveData(cls: str, step: num): list[num] {
+    if (cls == "heavy" || cls == "scythe" || cls == "polearm") {
+        if (cls == "polearm" && step == 1) { return [18, 35, 10, -100, -25, 80, 0, -95, 15, 6, 22, 1, 0.25, 1, 2, 1]; }
+        if (step == 1) { return [20, 95, 75, -75, -50, 55, -50, -75, 55, 8, 85, 1, 0.12, 1, 0, 1]; }
+        if (step == 2) { return [20, 60, -50, -80, 50, 95, 75, -80, -55, 6, 85, 1, 0.12, 1, 0, 1.1]; }
+        if (step == 3) { return [24, 175, 10, -15, -10, 30, 0, -45, 5, 20, 40, 1.1, 0.3, 1, 1, 1.45]; }
+        return [34, 120, 90, -80, -150, 70, -60, -80, 200, 10, 180, 1.15, 0.1, 1, 0, 1.9];
+    }
+    if (cls == "spear") {
+        if (step == 3) { return [16, 95, 75, -80, -45, 60, -50, -80, 50, 6, 75, 1, 0.1, 1, 0, 1.25]; }
+        if (step == 4) { return [26, 30, 10, -100, -30, 90, 0, -95, 20, 10, 20, 1.25, 0.6, 1, 2, 2]; }
+        return [13, 40, 10, -100, -20, 88, 0, -95, 15, 6, 22, 1, 0.22, 1, 2, 1 + (step - 1) * 0.1];
+    }
+    if (cls == "dagger" || cls == "fist") {
+        if (step == 1) { return [9, 30, 15, 20, -20, 95, 0, -90, 22, 4, 35, 1, 0.18, 0, 2, 1]; }
+        if (step == 2) { return [9, 90, 60, -80, -30, 70, -40, -80, 35, 4, 70, 1, 0.1, 0, 0, 1]; }
+        if (step == 3) { return [12, 150, 20, -40, -10, 85, -10, -95, 20, 10, 40, 1, 0.25, 0, 2, 1.5]; }
+        return [22, 20, 20, 30, -40, 100, -10, -95, 40, 15, 30, 1.1, 0.7, 0, 2, 2.2];
+    }
+    if (cls == "staff" || cls == "wand") {
+        if (step == 4) { return [22, 160, 15, -20, -10, 40, 0, -40, 5, 15, 45, 1, 0.2, 1, 1, 1.6]; }
+        return [16, 95, 70, -75, -35, 60, -45, -75, 40, 6, 70, 1, 0.1, 0, 0, 1];
+    }
+    // blade, blunt (default): two crosswise cuts and an overhead blow.
+    if (step == 1) { return [13, 100, 70, -70, -35, 60, -45, -70, 40, 6, 75, 1, 0.12, 0, 0, 1]; }
+    if (step == 2) { return [13, 70, -40, -80, 35, 92, 72, -80, -40, 6, 75, 1, 0.12, 0, 0, 1.1]; }
+    if (step == 3) { return [16, 170, 10, -20, -10, 40, 0, -40, 5, 15, 40, 1.05, 0.3, 0, 1, 1.4]; }
+    return [24, 120, 85, -75, -120, 60, -55, -75, 160, 8, 160, 1.1, 0.15, 0, 0, 1.8];
+}
+
+/** Ease: smooth 0..1. */
+function ease(t: num): num {
+    line c = num.clamp(t, 0, 1);
+    return line c * line c * (3 - 2 * line c);
+}
+
+/** Current tick of the game. */
+function now(): num {
+    return global tick;
+}
+
+/** Starts action a of length len for player uuid. */
+function actStart(uuid: str, a: str, len: num) {
+    global pAct[uuid] = a;
+    global pActT[uuid] = 0;
+    global pActLen[uuid] = num.max(1, len);
+    global pStruck[uuid] = 0;
+    global pPush[uuid] = vec(0, 0, 0);
+}
+
+/** 1 while player uuid is in action a. */
+function inAct(uuid: str, a: str): num {
+    if (global pAct.hasKeys(uuid) && global pAct[uuid] == a) {
+        return 1;
+    }
+    return 0;
+}
+
+/** 1 while the player's movement is locked (dead, in a menu). */
+function playerLocked(uuid: str): num {
+    if (inAct(uuid, "dead") == 1 || menuOpen(uuid) == 1 || global pDesign[uuid] == 1) {
+        return 1;
+    }
+    return 0;
+}
+
+/** 1 while the body should face the camera (attacking, casting, aiming). */
+function actionFacesCamera(uuid: str): num {
+    line a = global pAct[uuid];
+    if (line a == "atk" || line a == "heavy" || line a == "cast" || line a == "draw" || line a == "shoot" || line a == "ability") {
+        return 1;
+    }
+    return 0;
+}
+
+/** Attack speed of player uuid's main weapon. */
+function weaponSpeed(uuid: str): num {
+    line t = mainType(uuid);
+    if (line t == "fist") {
+        return 1.3;
+    }
+    return (wtData(line t)[3] as num) * (1 + stat(uuid, "agi") * 0.004);
+}
+
+// ---------------------------------------------------------------- input
+
+playerevent leftClick {
+    line uuid = default.uuid;
+    if (hasBody(line uuid) == 0) {
+        return;
+    }
+    event.cancel();
+    if (menuOpen(line uuid) == 1) {
+        menuClick(1);
+        return;
+    }
+    attackInput(line uuid, 1);
+}
+
+playerevent rightClick {
+    line uuid = default.uuid;
+    if (hasBody(line uuid) == 0) {
+        return;
+    }
+    event.cancel();
+    if (menuOpen(line uuid) == 1) {
+        menuClick(2);
+        return;
+    }
+    if (default.heldSlot == 9) {
+        return;
+    }
+    attackInput(line uuid, 2);
+}
+
+playerevent swapHands {
+    event.cancel();
+    if (hasBody(default.uuid) == 1) {
+        interact();
+    }
+}
+
+playerevent dropItem {
+    event.cancel();
+    if (hasBody(default.uuid) == 1) {
+        lockOnToggle(default.uuid);
+    }
+}
+
+lscancel playerevent takeDamage {
+}
+
+lscancel playerevent exhaustion {
+}
+
+/** A click: kind 1 light, 2 heavy. Starts an attack or queues it. */
+function attackInput(uuid: str, kind: num) {
+    line a = global pAct[uuid];
+    if (line a == "dead" || line a == "hurt") {
+        return;
+    }
+    if (line a != "") {
+        // Queue the next attack in the last part of the current one.
+        if (line a == "atk" || line a == "heavy") {
+            global pQueue[uuid] = kind;
+        }
+        return;
+    }
+    startAttack(uuid, kind);
+}
+
+/** Starts a light (1) or heavy (2) attack with the main weapon. */
+function startAttack(uuid: str, kind: num) {
+    line t = mainType(uuid);
+    line cls = animClass(line t);
+    if (line cls == "bow" || line cls == "crossbow") {
+        if (kind == 2) {
+            actStart(uuid, "draw", 20);
+        } else {
+            actStart(uuid, "shoot", num.round(10 / weaponSpeed(uuid)));
+        }
+        return;
+    }
+    if ((line cls == "staff" || line cls == "wand") && kind == 1) {
+        // Staves and wands shoot an arcane bolt on a light attack.
+        castBolt(uuid);
+        return;
+    }
+    if (line cls == "shield") {
+        line cls = "blade";
+    }
+    line step = 4;
+    line cost = 22;
+    if (kind == 1) {
+        line step = 1;
+        if (now() <= global pComboUntil[uuid]) {
+            line step = global pCombo[uuid] % 3 + 1;
+        }
+        line cost = 7;
+    }
+    if (staminaUse(uuid, line cost) == 0) {
+        line step = 1;
+        if (kind == 2) {
+            sendBar(uuid, "<red>Too tired!");
+            return;
+        }
+    }
+    global pCombo[uuid] = line step;
+    line md = moveData(line cls, line step);
+    line len = num.round(md[1] / weaponSpeed(uuid));
+    if (kind == 1) {
+        actStart(uuid, "atk", line len);
+    } else {
+        actStart(uuid, "heavy", line len);
+    }
+    select playersByName(uuid);
+    selected.playSound(snd("Player Attack (Sweep)", 0.4, 0.7 + line step * 0.12), bodyLoc(uuid));
+    select reset;
+}
+
+/** Dodge key (Shift): a roll in the moved direction with i-frames. */
+function onDodgeKey {
+    line uuid = default.uuid;
+    line a = global pAct[uuid];
+    if (line a == "dead" || line a == "dodge") {
+        return;
+    }
+    if (menuOpen(uuid) == 1) {
+        menuClose();
+        return;
+    }
+    if (staminaUse(uuid, 20) == 0) {
+        sendBar(uuid, "<red>Too tired to roll!");
+        return;
+    }
+    // Direction: where the keys push, or backwards.
+    line eye = default.eyeLocation.getDirection();
+    line fwd = vec(eye.x, 0, eye.z);
+    if (line fwd.len() < 0.05) {
+        line fwd = yawFwd(global pYaw[uuid]);
+    }
+    line fwd = line fwd.setLength(1);
+    line left = vec(line fwd.z, 0, 0 - line fwd.x);
+    line wish = line fwd * default.steerForwardMovement + line left * default.steerSidewaysMovement;
+    if (line wish.len() < 0.1) {
+        line wish = line fwd * -1;
+    }
+    actStart(uuid, "dodge", 11);
+    global pPush[uuid] = line wish.setLength(0.62);
+    global pYaw[uuid] = yawOf(line wish);
+    global pIframe[uuid] = now() + 8;
+    default.playSound(snd("Armadillo Hurt (Reduced)", 0.5, 1.4), bodyLoc(uuid));
+}
+
+// ---------------------------------------------------------------- tick
+
+/** One tick of player uuid's combat state. */
+function combatTick(uuid: str) {
+    if (!global pAct.hasKeys(uuid)) {
+        global pAct[uuid] = "";
+        global pActT[uuid] = 0;
+        global pActLen[uuid] = 1;
+        global pCombo[uuid] = 0;
+        global pComboUntil[uuid] = 0;
+        global pQueue[uuid] = 0;
+        global pIframe[uuid] = 0;
+        global pStop[uuid] = 0;
+        global pStruck[uuid] = 0;
+        global pPush[uuid] = vec(0, 0, 0);
+        global pShake[uuid] = 0;
+        global pBuff[uuid] = 1;
+        global pBuffUntil[uuid] = 0;
+    }
+    if (global pShake[uuid] > 0) {
+        global pShake[uuid] = num.max(0, global pShake[uuid] - 0.08);
+    }
+    line a = global pAct[uuid];
+    if (line a == "") {
+        return;
+    }
+    if (now() < global pStop[uuid]) {
+        return;
+    }
+    line t = global pActT[uuid] + 1;
+    global pActT[uuid] = line t;
+    line len = global pActLen[uuid];
+    line f = line t / line len;
+    if (line a == "atk" || line a == "heavy") {
+        if (global pStruck[uuid] == 0 && line f >= 0.45) {
+            global pStruck[uuid] = 1;
+            meleeStrike(uuid);
+        }
+    } else if (line a == "shoot") {
+        if (global pStruck[uuid] == 0 && line f >= 0.4) {
+            global pStruck[uuid] = 1;
+            shootArrow(uuid, 1);
+        }
+    } else if (line a == "draw") {
+        if (line t == line len) {
+            shootArrow(uuid, 2.2);
+            actStart(uuid, "shoot", 6);
+            global pStruck[uuid] = 1;
+            return;
+        }
+    } else if (line a == "cast" || line a == "ability") {
+        if (global pStruck[uuid] == 0 && line f >= 0.5) {
+            global pStruck[uuid] = 1;
+            if (line a == "cast") {
+                castRelease(uuid);
+            } else {
+                abilityRelease(uuid);
+            }
+        }
+    }
+    if (line t >= line len) {
+        if (line a == "dead") {
+            respawnPlayer(uuid);
+            return;
+        }
+        global pAct[uuid] = "";
+        if (line a == "atk") {
+            global pComboUntil[uuid] = now() + 12;
+        }
+        // A queued click chains into the next attack.
+        line q = global pQueue[uuid];
+        global pQueue[uuid] = 0;
+        if (line q != 0) {
+            select playersByName(uuid);
+            startAttack(uuid, line q);
+            select reset;
+        }
+    }
+}
+
+/** Velocity of the body this tick, given the wanted move v. */
+function actionMove(uuid: str, v: vec, fwd: vec): vec {
+    line a = global pAct[uuid];
+    if (line a == "") {
+        return v;
+    }
+    line f = global pActT[uuid] / global pActLen[uuid];
+    if (line a == "dodge") {
+        return global pPush[uuid] * (1.15 - line f);
+    }
+    if (line a == "dead") {
+        return vec(0, 0, 0);
+    }
+    if (line a == "hurt") {
+        return v * 0.3 + global pPush[uuid] * (1 - line f);
+    }
+    if (line a == "atk" || line a == "heavy") {
+        // Lunge forward through the strike, slow down otherwise.
+        line md = moveData(animClass(mainType(uuid)), global pCombo[uuid]);
+        if (line a == "heavy") {
+            line md = moveData(animClass(mainType(uuid)), 4);
+        }
+        line out = v * 0.35;
+        if (line f > 0.3 && line f < 0.6) {
+            line out = line out + yawFwd(global pYaw[uuid]) * (md[13] as num);
+        }
+        return line out;
+    }
+    if (line a == "draw" || line a == "cast" || line a == "ability") {
+        return v * 0.45;
+    }
+    return v * 0.6;
+}
+
+/** The pose of player uuid's current action over the locomotion pose p. */
+function actionPose(uuid: str, p: list[num]): list[num] {
+    line a = global pAct[uuid];
+    line out = p;
+    if (line a == "") {
+        // Weapon at rest: held low and forward; two-handers across.
+        line cls = animClass(mainType(uuid));
+        if (line cls == "bow") {
+            line out[9] = (line out[9] as num) + 10;
+            line out[17] = -40;
+        } else if (line cls == "staff") {
+            line out[6] = 15;
+            line out[17] = -75;
+        } else {
+            line out[6] = (line out[6] as num) + 12;
+            line out[17] = -30;
+        }
+        if (global pAim[uuid] > 0) {
+            line out[6] = 80;
+        }
+        return line out;
+    }
+    line t = global pActT[uuid];
+    line f = t / global pActLen[uuid];
+    if (line a == "dodge") {
+        line out[23] = line f * 360;
+        line out[16] = num.sin(line f * 180) * 6;
+        line out[12] = 70;
+        line out[14] = 60;
+        line out[6] = 60;
+        line out[9] = 60;
+        return line out;
+    }
+    if (line a == "dead") {
+        line out[23] = 0 - num.min(1, line f * 4) * 85;
+        line out[16] = num.min(1, line f * 4) * -9;
+        line out[6] = 150;
+        line out[9] = 150;
+        return line out;
+    }
+    if (line a == "hurt") {
+        line k = num.sin(line f * 180);
+        line out[1] = (line out[1] as num) - 18 * line k;
+        line out[4] = (line out[4] as num) + 15 * line k;
+        line out[6] = (line out[6] as num) - 20 * line k;
+        line out[9] = (line out[9] as num) - 20 * line k;
+        return line out;
+    }
+    if (line a == "draw" || line a == "shoot") {
+        // Bow: left arm out holding the bow, right arm drawing.
+        line k = num.min(1, line f * 2.5);
+        if (line a == "shoot") {
+            line k = 1 - line f;
+        }
+        line out[9] = 90;
+        line out[10] = -15;
+        line out[6] = 90;
+        line out[7] = 40 * line k;
+        line out[8] = 20 * line k;
+        line out[2] = 0 - 25 * line k;
+        line out[20] = -90;
+        line out[17] = -60;
+        return line out;
+    }
+    if (line a == "cast" || line a == "ability") {
+        line k = num.sin(num.min(1, line f * 1.6) * 180);
+        line out[6] = 40 + 90 * num.min(1, line f * 2);
+        line out[9] = 40 + 70 * num.min(1, line f * 2);
+        line out[11] = 20;
+        line out[8] = 15;
+        line out[17] = -80;
+        line out[1] = (line out[1] as num) - 6 * line k;
+        return line out;
+    }
+    // Attacks: windup to the start pose, strike to the end pose, recover.
+    line cls = animClass(mainType(uuid));
+    line step = global pCombo[uuid];
+    if (line a == "heavy") {
+        line step = 4;
+    }
+    line md = moveData(line cls, line step);
+    line w = 0;
+    line s = 0;
+    if (line f < 0.35) {
+        line w = ease(line f / 0.35);
+    } else if (line f < 0.55) {
+        line w = 1;
+        line s = ease((line f - 0.35) / 0.2);
+    } else {
+        line w = 1 - ease((line f - 0.55) / 0.45);
+        line s = 1;
+    }
+    line arP = md[2] + (md[6] - md[2]) * line s;
+    line arO = md[3] + (md[7] - md[3]) * line s;
+    line wP = md[4] + (md[8] - md[4]) * line s;
+    line tY = md[5] + (md[9] - md[5]) * line s;
+    line out[6] = (p[6] as num) * (1 - line w) + line arP * line w;
+    line out[8] = (p[8] as num) * (1 - line w) + line arO * line w;
+    line out[17] = -30 * (1 - line w) + line wP * line w;
+    line out[2] = (p[2] as num) * (1 - line w) + line tY * line w;
+    line out[1] = (p[1] as num) + md[10] * line s * line w;
+    if (md[14] == 1 || line cls == "staff") {
+        // Two-handed: the left hand follows to the grip.
+        line out[9] = line arP * line w + (p[9] as num) * (1 - line w);
+        line out[11] = (0 - line arO - 25) * line w + (p[11] as num) * (1 - line w);
+    } else if (line cls == "fist" && line step == 2) {
+        line out[9] = line out[6];
+        line out[6] = p[6];
+    }
+    if (line a == "heavy" && (line cls == "heavy" || line cls == "blade")) {
+        // Spinning heavy blow: the whole body turns with the cut.
+        line out[2] = (line out[2] as num) + 360 * line s * (1 - line s) * 0;
+    }
+    return line out;
+}
+
+// ---------------------------------------------------------------- hits
+
+/** Location of player uuid's body at chest height. */
+function bodyLoc(uuid: str): loc {
+    line f = bodyFeet(uuid);
+    return loc(line f.x, line f.y + 1.2, line f.z);
+}
+
+/** Resolves the strike of the current melee attack of player uuid. */
+function meleeStrike(uuid: str) {
+    line t = mainType(uuid);
+    line cls = animClass(line t);
+    if (line cls == "shield") {
+        line cls = "blade";
+    }
+    line step = global pCombo[uuid];
+    if (global pAct[uuid] == "heavy") {
+        line step = 4;
+    }
+    line md = moveData(line cls, line step);
+    line reach = 2.4;
+    if (line t != "fist") {
+        line reach = wtData(line t)[4] as num;
+    }
+    line reach = line reach * (md[12] as num);
+    line arc = md[11] as num;
+    line yaw = global pYaw[uuid];
+    line fwd = yawFwd(line yaw);
+    line feet = bodyFeet(uuid);
+    line center = line feet + vec(0, 1.1, 0);
+    line hits = 0;
+    for (line id of enemiesNear(line center, line reach + 1.5)) {
+        line ep = enemyCenter(line id);
+        line toV = vec(line ep.x - line feet.x, 0, line ep.z - line feet.z);
+        line d = line toV.len();
+        if (line d <= line reach + enemyRadius(line id)) {
+            line ang = 0;
+            if (line d > 0.3) {
+                line ang = num.acos(num.clamp(line toV.setLength(1).dot(line fwd), -1, 1));
+            }
+            if (line ang <= line arc) {
+                line dmg = meleeDamage(uuid) * (md[16] as num);
+                line crit = 0;
+                if (num.randomd(0, 1) < stat(uuid, "crit")) {
+                    line crit = 1;
+                    line dmg = line dmg * 1.75;
+                }
+                hitEnemy(line id, line dmg, line crit, line feet, 0.35 + (md[16] as num) * 0.15, uuid, "phys");
+                line hits += 1;
+                lifesteal(uuid, line dmg);
+            }
+        }
+    }
+    // Slash trail.
+    line col = 0xFFFFFF;
+    if (equipHas(uuid, "main") == 1) {
+        line col = matData(equipOf(uuid, "main").getTag("m") as num)[5] as num;
+    }
+    line plane = md[15] as num;
+    line sweep = 1;
+    if ((md[7] as num) > (md[3] as num)) {
+        line sweep = -1;
+    }
+    fxSlash(line center, line yaw, line plane, line sweep, line col, line reach);
+    if (line hits > 0) {
+        global pStop[uuid] = now() + 2 + num.min(2, line hits);
+        global pShake[uuid] = 0.25 + (md[16] as num) * 0.15;
+        select playersByName(uuid);
+        selected.playSound(snd("Player Attack (Strong)", 0.8, 0.8 + num.randomd(0, 0.3)), bodyLoc(uuid));
+        select reset;
+        durabilityUse(uuid, 1);
+    } else {
+        select playersByName(uuid);
+        selected.playSound(snd("Player Attack (Sweep)", 0.5, 1.2), bodyLoc(uuid));
+        select reset;
+    }
+}
+
+/** Melee damage of player uuid before move and crit multipliers. */
+function meleeDamage(uuid: str): num {
+    line t = mainType(uuid);
+    line base = 3;
+    line sc = [0.6, 0.4, 0];
+    if (line t != "fist") {
+        line w = wtData(line t);
+        line base = equipOf(uuid, "main").getTag("d") as num;
+        line sc = [line w[5], line w[6], line w[7]];
+    }
+    line m = 1 + stat(uuid, "str") * (line sc[1] as num) / 30 + stat(uuid, "dex") * (line sc[2] as num) / 30 + stat(uuid, "int") * (line sc[3] as num) / 30;
+    line r = playerRace(uuid);
+    line dmg = line base * line m * raceMul(line r, "melee");
+    if (now() < global pBuffUntil[uuid]) {
+        line dmg = line dmg * global pBuff[uuid];
+    }
+    return line dmg;
+}
+
+/** Heals player uuid by their race's lifesteal share of dmg. */
+function lifesteal(uuid: str, dmg: num) {
+    line ls = raceMul(playerRace(uuid), "lifesteal");
+    if (line ls > 0) {
+        global pHp[uuid] = num.min(stat(uuid, "maxHp"), global pHp[uuid] + dmg * line ls);
+    }
+}
+
+/** Wears the main weapon by n; a broken weapon still works at 20%. */
+function durabilityUse(uuid: str, n: num) {
+    if (equipHas(uuid, "main") == 0) {
+        return;
+    }
+    line it = equipOf(uuid, "main");
+    line d = num.max(0, (it.getTag("dur") as num) - n);
+    line e = pdGet(uuid, "equip") as dict;
+    line e["main"] = it.setTag("dur", line d);
+    pdSet(uuid, "equip", line e);
+    if (line d == 0 && (it.getTag("dur") as num) > 0) {
+        sendBar(uuid, "<red>Your weapon broke! Repair it at a blacksmith.");
+    }
+}
+
+/** Fires an arrow from player uuid's bow, power p (1 quick, 2.2 drawn). */
+function shootArrow(uuid: str, p: num) {
+    line eye = playerAim(uuid);
+    line from0: vec = bodyFeet(uuid) + vec(0, 1.4, 0) + yawFwd(global pYaw[uuid]) * 0.5;
+    line dir = (line eye - line from0).setLength(1);
+    line dmg = meleeDamage(uuid) * p * raceMul(playerRace(uuid), "ranged");
+    projSpawn(uuid, line from0, line dir * (1.6 + p * 0.6), "arrow", {dmg: line dmg, grav: 0.025, radius: 0.4, model: "rpg:fx/arrow", color: 0xFFFFFF, life: 60, elem: "phys"});
+    select playersByName(uuid);
+    selected.playSound(snd("Arrow Shoot", 0.8, 1.2 - p * 0.1), bodyLoc(uuid));
+    select reset;
+}
+
+/** The point player uuid aims at: where the camera's ray first hits a
+ * block or an enemy (up to 60 blocks). */
+function playerAim(uuid: str): vec {
+    if (lockOnTarget(uuid) != "") {
+        return enemyCenter(lockOnTarget(uuid));
+    }
+    select playersByName(uuid);
+    line eye = selected.eyeLocation;
+    select reset;
+    line stop = game.raycast(line eye, 60, blockCollision="Solid blocks");
+    line dir = line eye.getDirection();
+    line from = vec(line eye.x, line eye.y, line eye.z);
+    line toV = vec(line stop.x, line stop.y, line stop.z);
+    // Nearest enemy close to the camera ray.
+    line best = 999;
+    line out = line toV;
+    for (line id of enemiesNear(line from + line dir * 20, 40)) {
+        line c = enemyCenter(line id);
+        line along = (line c - line from).dot(line dir);
+        if (line along > 2 && line along < line best) {
+            line perp = (line c - (line from + line dir * line along)).len();
+            if (line perp < 1.2 + enemyRadius(line id)) {
+                line best = line along;
+                line out = line c;
+            }
+        }
+    }
+    return line out;
+}
+
+// ---------------------------------------------------------------- getting hurt
+
+/** Player uuid takes dmg from a hit at `from` (world). Returns the damage
+ * dealt after dodging, blocking and armor. */
+function playerHurt(uuid: str, dmg: num, from: vec, elem: str): num {
+    if (global pAct[uuid] == "dead") {
+        return 0;
+    }
+    line feet = bodyFeet(uuid);
+    if (now() < global pIframe[uuid]) {
+        fxText(line feet + vec(0, 2.2, 0), "<aqua>Dodged!", 1);
+        return 0;
+    }
+    line d = dmg * 100 / (100 + stat(uuid, "armor") * 4);
+    if (elem == "fire" && playerRace(uuid) == "demon") {
+        line d = line d * 0.5;
+    }
+    if (equipHas(uuid, "off") == 1 && mainType(uuid) != "bow") {
+        if (equipOf(uuid, "off").getTag("t") == "shield" && global pAct[uuid] == "") {
+            // Standing still with a shield blocks attacks from the front.
+            line toV = vec(from.x - line feet.x, 0, from.z - line feet.z);
+            if (line toV.len() > 0.1 && line toV.setLength(1).dot(yawFwd(global pYaw[uuid])) > 0.3 && staminaUse(uuid, 10) == 1) {
+                line d = line d * (1 - (equipOf(uuid, "off").getTag("d") as num) / 10);
+                fxText(line feet + vec(0, 2.2, 0), "<gray>Blocked", 1);
+            }
+        }
+    }
+    line d = wardAbsorb(uuid, line d);
+    if (line d <= 0) {
+        return 0;
+    }
+    line d = num.max(1, num.round(line d * 10) / 10);
+    global pHp[uuid] = global pHp[uuid] - line d;
+    global pRegenAt[uuid] = now() + 60;
+    global pShake[uuid] = 0.35;
+    fxText(line feet + vec(0, 2.3, 0), "<red>-%var(d)", 0);
+    line push = vec(line feet.x - from.x, 0, line feet.z - from.z);
+    if (line push.len() > 0.05) {
+        line push = line push.setLength(0.35);
+    }
+    select playersByName(uuid);
+    selected.playSound(snd("Player Hurt", 0.8, 1), bodyLoc(uuid));
+    select reset;
+    if (global pHp[uuid] <= 0) {
+        global pHp[uuid] = 0;
+        playerDie(uuid);
+    } else if (global pAct[uuid] == "" || line d > stat(uuid, "maxHp") * 0.12) {
+        actStart(uuid, "hurt", 7);
+        global pPush[uuid] = line push;
+    }
+    return line d;
+}
+
+/** Player uuid falls: they lie down, then respawn at the chapel. */
+function playerDie(uuid: str) {
+    actStart(uuid, "dead", 70);
+    lockOnClear(uuid);
+    select playersByName(uuid);
+    selected.sendTitle(s"<dark_red><b>You have fallen", s"<gray>You will wake at the Chapel of Dawn", 10, 50, 20);
+    selected.playSound(snd("Player Death", 1, 0.8));
+    select reset;
+}
+
+/** Brings player uuid back at the chapel with full health, minus some gold. */
+function respawnPlayer(uuid: str) {
+    global pAct[uuid] = "";
+    global pHp[uuid] = stat(uuid, "maxHp");
+    global pMana[uuid] = stat(uuid, "maxMana");
+    line g = pdGet(uuid, "gold") as num;
+    line lost = num.floor(line g * 0.1);
+    giveGold(uuid, 0 - line lost);
+    line at = respawnPoint();
+    select playersByName(uuid);
+    selected.sendMessage(s"<gray>The priests tended your wounds. <gold>-%var(lost) gold");
+    select reset;
+    select entitiesByName(global pBody[uuid]);
+    selectedEntity.teleport(at);
+    select reset;
+}
+
+/** Where fallen players wake: by the chapel, else the plaza. */
+function respawnPoint(): loc {
+    line i = bldOfType("chapel");
+    if (line i != 0) {
+        line b = global wBlds[line i];
+        line dr = bldDoor(line b);
+        line st = facingStep(line b["facing"] as str);
+        return loc((line dr[1] as num) + (line st[1] as num) * 3 + 0.5, townY() + 1, (line dr[2] as num) + (line st[2] as num) * 3 + 0.5);
+    }
+    line sp = saved spawnPoint;
+    return loc(line sp.x, line sp.y, line sp.z);
+}
+
+/** Action-bar message to player uuid (shown over the HUD for a while). */
+declare global pBarMsg: dict[str];
+declare global pBarUntil: dict[num];
+
+function sendBar(uuid: str, msg: str) {
+    global pBarMsg[uuid] = msg;
+    global pBarUntil[uuid] = now() + 40;
+}
+
+/** Extra text for the HUD: a recent message or the lock-on target. */
+function hudExtra(uuid: str): str {
+    if (global pBarUntil.hasKeys(uuid) && now() < global pBarUntil[uuid]) {
+        return global pBarMsg[uuid];
+    }
+    line tgt = lockOnTarget(uuid);
+    if (line tgt != "") {
+        return enemyHudLine(line tgt);
+    }
+    return "";
+}
+
+// ---------------------------------------------------------------- lock-on
+
+/** Per player: locked-on enemy UUID ("" none). */
+declare global pLock: dict[str];
+
+function lockOnTarget(uuid: str): str {
+    if (global pLock.hasKeys(uuid)) {
+        line t = global pLock[uuid];
+        if (line t != "" && enemyAlive(line t) == 1) {
+            return line t;
+        }
+        global pLock[uuid] = "";
+    }
+    return "";
+}
+
+function lockOnClear(uuid: str) {
+    global pLock[uuid] = "";
+    global pAim[uuid] = 0;
+}
+
+/** Q: locks on to the enemy nearest the screen center, or releases. */
+function lockOnToggle(uuid: str) {
+    if (lockOnTarget(uuid) != "") {
+        lockOnClear(uuid);
+        sendBar(uuid, "<gray>Lock released");
+        return;
+    }
+    line feet = bodyFeet(uuid);
+    line dir = default.eyeLocation.getDirection();
+    line best = "";
+    line bestS = 999;
+    for (line id of enemiesNear(line feet, 24)) {
+        line toV = enemyCenter(line id) - (line feet + vec(0, 1.5, 0));
+        line score = line toV.len() * (2 - line toV.setLength(1).dot(line dir));
+        if (line score < line bestS) {
+            line bestS = line score;
+            line best = line id;
+        }
+    }
+    if (line best == "") {
+        sendBar(uuid, "<gray>No enemy to lock on to");
+        return;
+    }
+    global pLock[uuid] = line best;
+    global pAim[uuid] = 1;
+}

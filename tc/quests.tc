@@ -1,0 +1,226 @@
+// Quests: the Adventurers' Guild contracts (generated, ranked F to S) and
+// the lord's story of the three threats to Valenmoor.
+
+/** Guild rank name of rank r (1..7). */
+function guildRankName(r: num): str {
+    return ["F", "E", "D", "C", "B", "A", "S"][num.clamp(r, 1, 7)] as str;
+}
+
+/** Contract templates by rank: [monster type, count, gold, xp, label]. */
+function contractPool(rank: num): list[list] {
+    if (rank <= 1) {
+        return [["wolf", 5, 40, 80, "Thin the wolf packs"], ["goblin", 4, 50, 90, "Goblin trouble"], ["goblinarcher", 3, 55, 95, "Goblin archers on the road"]];
+    }
+    if (rank == 2) {
+        return [["bandit", 5, 90, 200, "Bandit raiders"], ["crossbowman", 3, 90, 200, "Crossbows in the hills"], ["wolf", 10, 80, 180, "The great wolf cull"]];
+    }
+    if (rank == 3) {
+        return [["spider", 6, 140, 340, "Spider nest"], ["chief", 1, 300, 700, "Bounty: Varro the Bandit Chief"], ["direwolf", 3, 150, 360, "Dire wolves of the grove"]];
+    }
+    if (rank == 4) {
+        return [["witch", 3, 200, 520, "Hedge witches"], ["bear", 4, 220, 560, "Frost bears"], ["broodmother", 1, 500, 1200, "Bounty: the Brood Mother"]];
+    }
+    return [["skeleton", 8, 300, 900, "Lay the restless dead"], ["ghoul", 6, 320, 950, "Ghoul infestation"], ["archer", 6, 320, 950, "Bone archers"], ["cryptlord", 1, 1200, 3000, "Bounty: the Crypt Lord"]];
+}
+
+/** The player's active contracts: list of [type, need, have, gold, xp, label]. */
+function questsOf(uuid: str): list[list] {
+    line q = pdGet(uuid, "quests");
+    if (line q == 0 || (line q as dict).hasKeys("list") == 0) {
+        return [];
+    }
+    return (line q as dict)["list"] as list[list];
+}
+
+function questsSave(uuid: str, l: list[list]) {
+    pdSet(uuid, "quests", {list: l});
+}
+
+/** The guild board: three contracts for the player's rank. */
+function boardPage {
+    line uuid = default.uuid;
+    line rank = pdGet(uuid, "rank") as num;
+    line pool = contractPool(rank);
+    line d = dialog.create("board", s"<aqua><b>Contract Board</b> <gray>(rank %var(rn))", type="Multi Action with Exit Button");
+    line rn = guildRankName(rank);
+    line done = 0;
+    if (pdOf(uuid).hasKeys("done")) {
+        line done = pdGet(uuid, "done") as num;
+    }
+    line need = rank * 3;
+    dialog.addBodyText(line d, s"<gray>Rank <aqua>%var(rn)</aqua>. Contracts done: %var(done). Finish %var(need) to rank up. You can hold three at once.");
+    repeat (line i to line pool.len()) {
+        line c = line pool[line i] as list;
+        line label = line c[5] as str;
+        line cnt = line c[2];
+        line mname = monData(line c[1] as str)[1] as str;
+        line gold = line c[3];
+        line xp = line c[4];
+        dialog.addButton(line d, s"<aqua>%var(label)", s"Defeat %var(cnt) %var(mname). Reward %var(gold) gold, %var(xp) XP.", "q_take_%var(i)", 220);
+    }
+    default.openDialog(line d);
+}
+
+function questTake(uuid: str, i: num) {
+    line rank = pdGet(uuid, "rank") as num;
+    line c = contractPool(rank)[i] as list;
+    line l = questsOf(uuid);
+    if (line l.len() >= 3) {
+        default.sendMessage(s"<gray>You already hold three contracts.");
+        return;
+    }
+    for (line q of line l) {
+        if (line q[6] == line c[5]) {
+            default.sendMessage(s"<gray>You already took that one.");
+            return;
+        }
+    }
+    line l.append([line c[1], line c[2], 0, line c[3], line c[4], line c[5]]);
+    questsSave(uuid, line l);
+    line label = line c[5] as str;
+    default.sendMessage(s"<aqua>Contract taken: <white>%var(label)");
+    default.playSound(snd("Book Page Turn", 1, 1));
+}
+
+/** Counts kills of monster type t toward the player's contracts and story. */
+function questOnKill(uuid: str, t: str) {
+    line l = questsOf(uuid);
+    line changed = 0;
+    repeat (line i to line l.len()) {
+        line q = line l[line i] as list;
+        if (line q[1] == t && (line q[3] as num) < (line q[2] as num)) {
+            line q[3] = (line q[3] as num) + 1;
+            line l[line i] = line q;
+            line changed = 1;
+            line have = line q[3];
+            line need = line q[2];
+            line label = line q[6] as str;
+            sendBar(uuid, "<aqua>%var(label): %var(have)/%var(need)");
+            if (line have == line need) {
+                select playersByName(uuid);
+                selected.sendMessage(s"<aqua>Contract complete: <white>%var(label)</white>. <gray>Report to the guild.");
+                select reset;
+            }
+        }
+    }
+    if (line changed == 1) {
+        questsSave(uuid, line l);
+    }
+    // The lord's story.
+    line st = lordStage(uuid);
+    if ((st == 1 && t == "chief") || (st == 3 && t == "broodmother") || (st == 5 && t == "cryptlord")) {
+        pdSet(uuid, "story", st + 1);
+        select playersByName(uuid);
+        selected.sendTitle(s"<gold>Threat vanquished", s"<gray>Return to Lord Aldric Valen", 10, 50, 15);
+        select reset;
+    }
+}
+
+/** Hands in finished contracts. */
+function questReport(uuid: str) {
+    line l = questsOf(uuid);
+    line keep: list[list] = [];
+    line n = 0;
+    for (line q of line l) {
+        if ((line q[3] as num) >= (line q[2] as num)) {
+            line n += 1;
+            giveGold(uuid, line q[4] as num);
+            giveXp(uuid, line q[5] as num);
+            pdSet(uuid, "rep", (pdGet(uuid, "rep") as num) + 5);
+        } else {
+            line keep.append(line q);
+        }
+    }
+    questsSave(uuid, line keep);
+    if (line n == 0) {
+        default.sendMessage(s"<gray>\"Nothing finished yet. Off you go.\"");
+        return;
+    }
+    line done = 0;
+    if (pdOf(uuid).hasKeys("done")) {
+        line done = pdGet(uuid, "done") as num;
+    }
+    line done += line n;
+    pdSet(uuid, "done", line done);
+    line rank = pdGet(uuid, "rank") as num;
+    if (line done >= line rank * 3 && line rank < 7) {
+        pdSet(uuid, "rank", line rank + 1);
+        pdSet(uuid, "done", 0);
+        line rn = guildRankName(line rank + 1);
+        default.sendTitle(s"<aqua><b>Rank %var(rn)", s"<gray>The guild trusts you with harder work", 10, 50, 15);
+        default.playSound(snd("Player Level Up", 1, 1.2));
+    }
+    default.sendMessage(s"<aqua>%var(n) contract(s) handed in. Well done.");
+}
+
+/** Contracts page in the Journal. */
+function questsPage {
+    line uuid = default.uuid;
+    line d = dialog.create("quests", s"<aqua><b>Quests", type="Multi Action with Exit Button");
+    line st = lordStage(uuid);
+    line story = ["Speak with Lord Aldric Valen in his keep.", "Defeat Varro the Bandit Chief at the camp in the wilds.", "Report Varro's defeat to the lord.",
+        "Destroy the Brood Mother in the hill cave.", "Report the Brood Mother's death to the lord.", "Descend beneath the ruins and slay the Crypt Lord.",
+        "Return to the lord for your reward.", "You are the Hero of Valenmoor."][num.clamp(st + 1, 1, 8)] as str;
+    dialog.addBodyText(line d, s"<gold>The Three Threats: <white>%var(story)");
+    for (line q of questsOf(uuid)) {
+        line label = line q[6] as str;
+        line have = line q[3];
+        line need = line q[2];
+        dialog.addBodyText(line d, s"<aqua>%var(label): <white>%var(have)/%var(need)");
+    }
+    if (questsOf(uuid).len() == 0) {
+        dialog.addBodyText(line d, s"<gray>No contracts. The Adventurers' Guild has work.");
+    }
+    dialog.addButton(line d, s"Back", s"Journal", "j_back", 100);
+    default.openDialog(line d);
+}
+
+/** Story stage: 0 not met, 1 hunt chief, 2 report, 3 brood mother, 4
+ * report, 5 crypt lord, 6 report, 7 done. */
+function lordStage(uuid: str): num {
+    if (pdOf(uuid).hasKeys("story")) {
+        return pdGet(uuid, "story") as num;
+    }
+    return 0;
+}
+
+/** The lord's audience. */
+function lordTalk(uuid: str) {
+    line st = lordStage(uuid);
+    line say = "";
+    if (st == 0) {
+        line say = "Three threats gnaw at Valenmoor. A bandit chief, Varro, bleeds our roads. In the hills, a brood mother breeds horrors. And beneath the old ruins, the Crypt Lord stirs. Begin with Varro. His camp lies in the wilds.";
+        pdSet(uuid, "story", 1);
+    } else if (st == 1) {
+        line say = "Varro still lives. His camp is out in the wilds, past the farms.";
+    } else if (st == 2) {
+        line say = "Varro is dead? The roads will breathe again. Take this, and now the cave: the Brood Mother must die.";
+        giveGold(uuid, 300);
+        giveXp(uuid, 800);
+        default.giveItems(makeWeapon("wand", 4, 4, now()));
+        pdSet(uuid, "story", 3);
+    } else if (st == 3) {
+        line say = "The Brood Mother lurks deep in the hill cave. Burn it out.";
+    } else if (st == 4) {
+        line say = "The hills are quiet. You have my thanks, and this. Now the worst of them: the Crypt Lord, under the ruins.";
+        giveGold(uuid, 600);
+        giveXp(uuid, 1600);
+        default.giveItems(makeArmor("torso", "plate", 6, 5, now()));
+        pdSet(uuid, "story", 5);
+    } else if (st == 5) {
+        line say = "The Crypt Lord waits in the dark beneath the ruins. Bring light.";
+    } else if (st == 6) {
+        line say = "It is done. Valenmoor owes you everything. Kneel, Hero of Valenmoor.";
+        giveGold(uuid, 2000);
+        giveXp(uuid, 5000);
+        default.giveItems(makeWeapon("greatsword", 9, 6, now()));
+        pdSet(uuid, "story", 7);
+        pdSet(uuid, "rep", (pdGet(uuid, "rep") as num) + 100);
+        allPlayers.sendTitle(s"<gold><b>Hero of Valenmoor", s"<gray>The three threats are no more", 10, 80, 20);
+    } else {
+        line say = "Valenmoor will remember you, hero. The guild still has work, if you crave it.";
+    }
+    line d = dialog.create("lord", s"<gold><b>Lord Aldric Valen", type="Multi Action with Exit Button");
+    dialog.addBodyText(line d, s"<white>\"%var(say)\"");
+    default.openDialog(line d);
+}

@@ -1,0 +1,183 @@
+// Terrain: hills, the river, the lake and the flattened town ground
+// (mirrors Plan.height in tools/worldgen.py). Land heights come from a
+// lattice every 8 blocks with bilinear columns in between; the river and
+// lake are carved per column.
+
+/** Water surface height; the plot's own flat ground sits at y 49. */
+function waterY(): num {
+    return 49;
+}
+
+/** Town ground height (top block). */
+function townY(): num {
+    return 52;
+}
+
+/** River center x at row z. */
+function riverX(z: num): num {
+    return global wCx - (global wR + 38) + 22 * num.sinr((z - global wCz) / 83) + 9 * num.sinr((z + worldSeed()) / 31);
+}
+
+/** Land height without water (hills, edge mountains, flat town). */
+function landHeight(x: num, z: num): num {
+    line hills = 0.6 * wNoise(x, z, 96, 11) + 0.3 * wNoise(x, z, 37, 23) + 0.1 * wNoise(x, z, 13, 37);
+    line de = num.min(num.min(x, z), num.min(global wS - 1 - x, global wS - 1 - z));
+    line mount = num.max(0, (70 - line de) / 70) ** 2 * 38;
+    line dc = num.root((x - global wCx) ** 2 + (z - global wCz) ** 2);
+    line k = wSmooth(num.clamp((line dc - global wR - 20) / 60, 0, 1));
+    return 51 + (line hills * 20 + line mount) * line k + (1 - line k);
+}
+
+/** Final height at a column given its land height. */
+function carveWater(x: num, z: num, h: num, rx: num): num {
+    line r = h;
+    line dr = num.abs(x - rx);
+    if (line dr < 12) {
+        if (line dr >= 5) {
+            line r = num.min(line r, 48 + line dr * 0.35);
+        } else {
+            line r = 45 + line dr * 0.3;
+        }
+    }
+    line lk = global wPois["lake"];
+    line lx = line lk[1] as num;
+    line lz = line lk[2] as num;
+    line lr = line lk[3] as num;
+    if (num.abs(x - line lx) < line lr * 1.5 && num.abs(z - line lz) < line lr * 1.5) {
+        line dl = num.root((x - line lx) ** 2 + (z - line lz) ** 2) / line lr + 0.25 * (wNoise(x, z, 17, 41) - 0.5);
+        if (line dl < 1.25) {
+            line r = num.min(line r, 44 + line dl * 4.5);
+        }
+    }
+    return num.round(line r);
+}
+
+/** Height of the ground at (x, z) (top block y). */
+function groundY(x: num, z: num): num {
+    return carveWater(x, z, landHeight(x, z), riverX(z));
+}
+
+/** Lattice row `row` (z = row * 8) of land heights, cached. */
+declare global wLat: dict[list];
+
+function latRow(row: num): list[num] {
+    line key = "%var(row)";
+    if (global wLat.hasKeys(line key)) {
+        return global wLat[line key] as list[num];
+    }
+    line out: list[num] = [];
+    line z = row * 8;
+    line n = num.floor(global wS / 8) + 2;
+    repeat (line i to line n) {
+        line out.append(landHeight((line i - 1) * 8, line z));
+        wBreathe(40);
+    }
+    global wLat[line key] = line out;
+    // Keep the cache small.
+    line old = "%math(%var(row)-3)";
+    if (global wLat.hasKeys(line old)) {
+        global wLat.remove(line old);
+    }
+    return line out;
+}
+
+/** Surface block for a column of height h, at distance dr from the river. */
+function surfaceOf(h: num, dr: num, x: num, z: num): str {
+    if (h < waterY()) {
+        if (h < 46) {
+            return "clay";
+        }
+        return "sand";
+    }
+    if (h <= 50 && dr < 16) {
+        return "sand";
+    }
+    if (h >= 84) {
+        return "snow_block";
+    }
+    if (h >= 74) {
+        if (wHash(x, z, 5) % 3 == 0) {
+            return "andesite";
+        }
+        return "stone";
+    }
+    if (wHash(num.floor(x / 3), num.floor(z / 3), 77) % 40 == 0) {
+        return "coarse_dirt";
+    }
+    return "grass_block";
+}
+
+/** Places a run of columns x0..x1 on row z, all of height h and surface s. */
+function placeRun(x0: num, x1: num, z: num, h: num, s: str) {
+    if (h > 49) {
+        if (h >= 52) {
+            game.setRegion(item("stone"), loc(x0, 46, z), loc(x1, h - 3, z));
+        }
+        game.setRegion(item("dirt"), loc(x0, num.max(46, h - 2), z), loc(x1, h - 1, z));
+    }
+    if (s == "snow_block" || s == "stone" || s == "andesite") {
+        game.setRegion(item("stone"), loc(x0, num.max(46, h - 3), z), loc(x1, h - 1, z));
+    }
+    game.setRegion(item(s), loc(x0, h, z), loc(x1, h, z));
+    if (h < waterY()) {
+        game.setRegion(item("water_bucket"), loc(x0, h + 1, z), loc(x1, waterY(), z));
+    }
+}
+
+/** Builds terrain row z (all x). */
+function terrainRow(z: num) {
+    line row = num.floor(z / 8);
+    line a = latRow(line row);
+    line b = latRow(line row + 1);
+    line fz = (z - line row * 8) / 8;
+    line rx = riverX(z);
+    // The flat town span of this row, filled in one go.
+    line dzc = z - global wCz;
+    line half = -1;
+    if (num.abs(line dzc) < global wR + 20) {
+        line half = num.root((global wR + 20) ** 2 - line dzc ** 2);
+    }
+    line tx0 = global wCx - line half;
+    line tx1 = global wCx + line half;
+    line runX = 0;
+    line runH = -999;
+    line runS = "";
+    line x = 0;
+    line S = global wS;
+    while (line x < line S) {
+        if (line half > 0 && line x >= line tx0 && line x <= line tx1) {
+            if (line runH != -999) {
+                placeRun(line runX, line x - 1, z, line runH, line runS);
+                line runH = -999;
+            }
+            line xe = num.min(num.floor(line tx1), line S - 1);
+            placeRun(line x, line xe, z, townY(), "grass_block");
+            line x = line xe + 1;
+        } else {
+            line i = num.floor(line x / 8);
+            line fx = (line x - line i * 8) / 8;
+            line h0 = line a[line i + 1] + (line a[line i + 2] - line a[line i + 1]) * line fx;
+            line h1 = line b[line i + 1] + (line b[line i + 2] - line b[line i + 1]) * line fx;
+            line h = carveWater(line x, z, line h0 + (line h1 - line h0) * line fz, line rx);
+            line s = surfaceOf(line h, num.abs(line x - line rx), line x, z);
+            if (line h != line runH || line s != line runS) {
+                if (line runH != -999) {
+                    placeRun(line runX, line x - 1, z, line runH, line runS);
+                }
+                line runX = line x;
+                line runH = line h;
+                line runS = line s;
+            }
+            line x += 1;
+        }
+        wBreathe(60);
+    }
+    if (line runH != -999) {
+        placeRun(line runX, line S - 1, z, line runH, line runS);
+    }
+    // Keep a pocket of air at the plot's own spawn point.
+    if (z >= 7 && z <= 13) {
+        fill("air", 7, 50, z, 13, 53, z);
+        fill("stone_bricks", 7, 49, z, 13, 49, z);
+    }
+}

@@ -1,0 +1,712 @@
+// Townsfolk: workers, guards and villagers with their own looks, homes and
+// days (PLAN.md, "NPCs").
+//
+// Each NPC is a rig riding an invisible husk, like the player. A utility
+// decision model picks an activity every few seconds from the time of day,
+// the NPC's needs (energy, hunger, company), its role and danger nearby;
+// the NPC then walks the street graph to where that activity happens.
+
+/** NPC ids and their state, keyed by id ("n<k>"). */
+declare global nList: list[str];
+declare global nRole: dict[str];
+declare global nName: dict[str];
+declare global nWork: dict[num];
+declare global nHome: dict[num];
+declare global nBody: dict[str];
+declare global nLabel: dict[str];
+declare global nPos: dict[vec];
+declare global nPath: dict[list];
+declare global nAct: dict[str];
+declare global nNext: dict[num];
+declare global nNeeds: dict[list];
+declare global nYaw: dict[num];
+declare global nPhase: dict[num];
+declare global nStuck: dict[num];
+declare global nTalk: dict[str];
+declare global nInside: dict[num];
+/** Street graph: node key -> vec, and node key -> neighbour keys. */
+declare global gNode: dict[vec];
+declare global gAdj: dict[list];
+/** 1 once the town has been populated this session. */
+declare global nReady: num;
+/** Saved NPC names so they persist (by id). */
+declare saved npcNames: dict[str];
+
+// ---------------------------------------------------------------- clock
+
+/** Hour of the day, 0..24 (one day is 20 minutes). */
+function hourNow(): num {
+    return ((global tick + 2000) % 24000) / 1000 + 6 - 24 * num.floor((((global tick + 2000) % 24000) / 1000 + 6) / 24);
+}
+
+/** Keeps every player's sky in step with the clock. */
+function clockTick {
+    if (global tick % 100 == 0) {
+        game.setTime((global tick + 2000) % 24000);
+    }
+}
+
+// ---------------------------------------------------------------- street graph
+
+/** Node key of a point (rounded so meeting street ends merge). */
+function nodeKey(x: num, z: num): str {
+    line kx = num.round(x / 2) * 2;
+    line kz = num.round(z / 2) * 2;
+    return "%var(kx),%var(kz)";
+}
+
+/** Builds the street graph of the town from the plan. */
+function graphBuild {
+    global gNode = {};
+    global gAdj = {};
+    for (line r of global wRoads) {
+        if (line r[6] != "country") {
+            line a = nodeKey(line r[1] as num, line r[2] as num);
+            line b = nodeKey(line r[3] as num, line r[4] as num);
+            global gNode[line a] = vec(line r[1] as num, townY() + 1, line r[2] as num);
+            global gNode[line b] = vec(line r[3] as num, townY() + 1, line r[4] as num);
+            graphLink(line a, line b);
+        }
+        wBreathe(40);
+    }
+    // Join street ends that nearly meet (lanes onto the ring and so on).
+    line keys = global gNode.getKeys();
+    for (line ka of line keys) {
+        line pa = global gNode[line ka as str];
+        line best = "";
+        line bd = 9;
+        for (line kb of line keys) {
+            if (line kb != line ka) {
+                line d = (global gNode[line kb as str] - line pa).len();
+                if (line d < line bd && (global gAdj[line ka as str] as list).find(line kb) == 0) {
+                    line bd = line d;
+                    line best = line kb as str;
+                }
+            }
+        }
+        if (line best != "") {
+            graphLink(line ka as str, line best);
+        }
+        wBreathe(4);
+    }
+}
+
+function graphLink(a: str, b: str) {
+    if (a == b) {
+        return;
+    }
+    if (!global gAdj.hasKeys(a)) { global gAdj[a] = []; }
+    if (!global gAdj.hasKeys(b)) { global gAdj[b] = []; }
+    line la = global gAdj[a];
+    if (line la.find(b) == 0) {
+        line la.append(b);
+        global gAdj[a] = line la;
+    }
+    line lb = global gAdj[b];
+    if (line lb.find(a) == 0) {
+        line lb.append(a);
+        global gAdj[b] = line lb;
+    }
+}
+
+/** Nearest graph node to p. */
+function nearestNode(p: vec): str {
+    line best = "";
+    line bd = 99999;
+    for (line k, line v of global gNode) {
+        line d = (line v - p).len();
+        if (line d < line bd) {
+            line bd = line d;
+            line best = line k;
+        }
+    }
+    return line best;
+}
+
+/** Street route from p to q: node positions (breadth first, at most 120). */
+function route(p: vec, q: vec): list[vec] {
+    line s = nearestNode(p);
+    line t = nearestNode(q);
+    line out: list[vec] = [];
+    if (line s == "" || line t == "") {
+        return line out;
+    }
+    line prev = {};
+    line prev[line s] = "";
+    line queue: list[str] = [line s];
+    line qi = 1;
+    while (line qi <= line queue.len() && !line prev.hasKeys(line t)) {
+        line k = line queue[line qi];
+        line qi += 1;
+        if (global gAdj.hasKeys(line k)) {
+            for (line n of global gAdj[line k] as list[str]) {
+                if (!line prev.hasKeys(line n)) {
+                    line prev[line n] = line k;
+                    line queue.append(line n);
+                }
+            }
+        }
+        if (line qi > 400) {
+            line qi = line queue.len() + 1;
+        }
+    }
+    if (!line prev.hasKeys(line t)) {
+        return line out;
+    }
+    line rev: list[vec] = [];
+    line k = line t;
+    while (line k != "" && line rev.len() < 120) {
+        line rev.append(global gNode[line k]);
+        line k = line prev[line k] as str;
+    }
+    repeat (line i to line rev.len()) {
+        line out.append(line rev[line rev.len() + 1 - line i]);
+    }
+    return line out;
+}
+
+/** The porch of building i (2 blocks out of its door) and its inside spot. */
+function porchOf(i: num): vec {
+    line b = global wBlds[i];
+    line dr = bldDoor(line b);
+    line st = facingStep(line b["facing"] as str);
+    return vec((line dr[1] as num) + (line st[1] as num) * 2 + 0.5, townY() + 1, (line dr[2] as num) + (line st[2] as num) * 2 + 0.5);
+}
+
+function insideOf(i: num): vec {
+    line b = global wBlds[i];
+    line dr = bldDoor(line b);
+    line st = facingStep(line b["facing"] as str);
+    return vec((line dr[1] as num) - (line st[1] as num) * 2 + 0.5, townY() + 1, (line dr[2] as num) - (line st[2] as num) * 2 + 0.5);
+}
+
+// ---------------------------------------------------------------- population
+
+/** Role of the worker of building type t ("" none). */
+function workerRole(t: str): str {
+    line r = {keep: "lord", guild: "guildmaster", inn: "innkeeper", library: "librarian", armory: "armorer",
+        blacksmith: "smith", chapel: "priest", tavern: "barkeep", alchemist: "alchemist", store: "merchant",
+        bakery: "baker", magetower: "archmage", barracks: "captain", stables: "stablemaster"};
+    if (line r.hasKeys(t)) {
+        return line r[t] as str;
+    }
+    return "";
+}
+
+/** Title shown under an NPC's name. */
+function roleTitle(r: str): str {
+    line t = {lord: "Lord of Valenmoor", guildmaster: "Guildmaster", innkeeper: "Innkeeper", librarian: "Librarian",
+        armorer: "Armorer", smith: "Blacksmith", priest: "Priest", barkeep: "Barkeep", alchemist: "Alchemist",
+        merchant: "Merchant", baker: "Baker", archmage: "Archmage", captain: "Captain of the Guard",
+        stablemaster: "Stablemaster", guard: "Town Guard", trainer: "Weapons Trainer", villager: "Villager",
+        farmer: "Farmer", bard: "Bard", noble: "Noble", child: "Child"};
+    if (line t.hasKeys(r)) {
+        return line t[r] as str;
+    }
+    return r;
+}
+
+/** A name from hash h for an NPC of race r. */
+function npcNameOf(r: str, h: num): str {
+    line first = ["Aldric", "Bryn", "Cedric", "Daria", "Edda", "Fenna", "Gareth", "Hilde", "Ivo", "Jorun", "Kael", "Lysa",
+        "Merek", "Nessa", "Oswin", "Perrin", "Quill", "Rowena", "Sabine", "Tobin", "Ulric", "Vesna", "Wren", "Yara", "Zed",
+        "Thalia", "Brom", "Elowen", "Garrick", "Isolde", "Leof", "Mira"];
+    line last = ["Ashford", "Blackthorn", "Copperkettle", "Dunmore", "Elmsworth", "Fairwind", "Greaves", "Holloway",
+        "Ironside", "Kestrel", "Larkspur", "Millbrook", "Northcott", "Oakheart", "Pellwood", "Ravenhill", "Stonebrook", "Thornfield"];
+    line f = line first[1 + h % line first.len()] as str;
+    line l = line last[1 + num.floor(h / 37) % line last.len()] as str;
+    if (r == "dwarf") {
+        line l = ["Ironbeard", "Stonefist", "Deepdelve", "Anvilborn"][1 + num.floor(h / 41) % 4] as str;
+    } else if (r == "elf") {
+        line l = ["Silverleaf", "Moonwhisper", "Dawnstrider", "Starbrook"][1 + num.floor(h / 41) % 4] as str;
+    } else if (r == "demon") {
+        line l = ["of the Ash", "Emberveil", "Nightbrand"][1 + num.floor(h / 41) % 3] as str;
+    }
+    return "%var(f) %var(l)";
+}
+
+/** Race for NPC hash h (mostly human). */
+function npcRace(h: num): str {
+    line r = h % 100;
+    if (line r < 50) { return "human"; }
+    if (line r < 62) { return "elf"; }
+    if (line r < 74) { return "dwarf"; }
+    if (line r < 79) { return "demon"; }
+    if (line r < 86) { return "felkin"; }
+    if (line r < 92) { return "lupin"; }
+    if (line r < 96) { return "ursan"; }
+    return "leporin";
+}
+
+/** Dresses appearance app for role r. */
+function dressForRole(app: dict, r: str, h: num): dict {
+    line a = app;
+    line armor = {head: ["", 0, 0], torso: ["", 0, 0], arm: ["", 0, 0], leg: ["", 0, 0]};
+    if (r == "guard" || r == "captain") {
+        line set = "chain";
+        if (r == "captain") { line set = "plate"; }
+        line armor = {head: [line set, 0xB4B8BC, 0x8A2E2E], torso: [line set, 0xB4B8BC, 0x8A2E2E], arm: [line set, 0xB4B8BC, 0x8A2E2E], leg: [line set, 0xB4B8BC, 0x8A2E2E]};
+        line a["main"] = "rpg:weapon/halberd|11843772|4864040|9080466|1";
+        if (r == "captain") { line a["main"] = "rpg:weapon/longsword|14080228|3025448|10528944|2"; }
+    } else if (r == "lord" || r == "noble") {
+        line armor = {head: ["noble", 0xD8A858, 0xE0C060], torso: ["noble", 0x6A1E1E, 0xE0C060], arm: ["noble", 0x6A1E1E, 0xE0C060], leg: ["noble", 0x3A2A1A, 0xE0C060]};
+        if (r == "noble") { line armor["head"] = ["", 0, 0]; }
+    } else if (r == "librarian" || r == "archmage" || r == "priest") {
+        line c = 0x3A3A6A;
+        if (r == "archmage") { line c = 0x4A2A6A; }
+        if (r == "priest") { line c = 0xE8E4D8; }
+        line armor = {head: ["", 0, 0], torso: ["robe", line c, 0xE0C060], arm: ["robe", line c, 0xE0C060], leg: ["", 0, 0]};
+        if (r == "archmage") {
+            line armor["head"] = ["robe", line c, 0xE0C060];
+            line a["main"] = "rpg:weapon/staff|5917328|1710634|12615935|2";
+        }
+    } else if (r == "smith" || r == "armorer") {
+        line armor = {head: ["", 0, 0], torso: ["leather", 0x4A3422, 0x2A1E14], arm: ["leather", 0x4A3422, 0x2A1E14], leg: ["", 0, 0]};
+        line a["main"] = "rpg:weapon/warhammer|11843772|4864040|9080466|1";
+    } else if (r == "guildmaster" || r == "trainer") {
+        line armor = {head: ["", 0, 0], torso: ["scale", 0x8A8E92, 0xB08850], arm: ["leather", 0x5A3A22, 0xB08850], leg: ["leather", 0x5A3A22, 0xB08850]};
+        line a["main"] = "rpg:weapon/sword|14080228|3025448|10528944|1";
+    } else if (r == "farmer") {
+        line a["main"] = "rpg:weapon/scythe|9080466|9861192|7031854|1";
+    }
+    line a["armor"] = line armor;
+    return line a;
+}
+
+/** Spawns every NPC of the town. */
+function worldPopulate {
+    planLoad();
+    if (global gNode.len() == 0) {
+        graphBuild();
+    }
+    npcClear();
+    line k = 0;
+    repeat (line i to global wBlds.len()) {
+        line t = global wBlds[line i]["type"] as str;
+        line role = workerRole(line t);
+        if (line role != "") {
+            line k += 1;
+            npcSpawn("n%var(k)", line role, line i, npcHomeFor(line k));
+            if (line t == "guild") {
+                line k += 1;
+                npcSpawn("n%var(k)", "trainer", line i, npcHomeFor(line k));
+            } else if (line t == "tavern") {
+                line k += 1;
+                npcSpawn("n%var(k)", "bard", line i, npcHomeFor(line k));
+            } else if (line t == "barracks" || line t == "keep") {
+                repeat (2) {
+                    line k += 1;
+                    npcSpawn("n%var(k)", "guard", line i, line i);
+                }
+            }
+        }
+        wBreathe(2);
+    }
+    // Villagers: about one per four houses.
+    repeat (line i to global wBlds.len()) {
+        if (global wBlds[line i]["type"] == "house" && line i % 4 == 0) {
+            line k += 1;
+            line h = wHash(line i, 7, 77);
+            line role = ["villager", "villager", "farmer", "noble", "child", "villager"][1 + line h % 6] as str;
+            npcSpawn("n%var(k)", line role, 0, line i);
+            wBreathe(2);
+        }
+    }
+    global nReady = 1;
+}
+
+/** A house for NPC k to live in. */
+function npcHomeFor(k: num): num {
+    line n = 0;
+    repeat (line i to global wBlds.len()) {
+        if (global wBlds[line i]["type"] == "house") {
+            line n += 1;
+            if (line n % 23 == k % 23) {
+                return line i;
+            }
+        }
+    }
+    return 1;
+}
+
+/** Removes every NPC. */
+function npcClear {
+    for (line id of global nList) {
+        npcDespawn(line id);
+    }
+    global nList = [];
+}
+
+function npcDespawn(id: str) {
+    rigRemove(id);
+    if (global nBody.hasKeys(id)) {
+        select entitiesByName([global nBody[id], global nLabel[id]]);
+        selectedEntity.remove();
+        select reset;
+    }
+}
+
+/** Spawns NPC id with role at work building `work` (0 none), living in
+ * house `home`. */
+function npcSpawn(id: str, role: str, work: num, home: num) {
+    line h = wHash(num.parse(id.replace("n", "")), 13, 4242);
+    line race = npcRace(line h);
+    if (role == "smith" || role == "armorer") {
+        line race = ["dwarf", "human", "dwarf", "ursan"][1 + line h % 4] as str;
+    } else if (role == "librarian" || role == "archmage") {
+        line race = ["elf", "human", "demon", "elf"][1 + line h % 4] as str;
+    } else if (role == "lord") {
+        line race = "human";
+    }
+    line app = dressForRole(appRandom(line race, line h), role, line h);
+    if (role == "child") {
+        line app["scale"] = (line app["scale"] as num) * 0.62;
+    }
+    line name = npcNameOf(line race, line h);
+    if (role == "lord") {
+        line name = "Lord Aldric Valen";
+    }
+    if (saved npcNames.hasKeys(id)) {
+        line name = saved npcNames[id];
+    } else {
+        saved npcNames[id] = line name;
+    }
+    line spawnAt = porchOf(num.max(1, work));
+    if (work == 0) {
+        line spawnAt = porchOf(home);
+    }
+    game.spawnMob(item("husk_spawn_egg"), loc(spawnAt.x, spawnAt.y, spawnAt.z));
+    line body = lastEntity.uuid;
+    if (line body == 0 || line body == "") {
+        return;
+    }
+    lastEntity.setAI(ai="Insentient");
+    lastEntity.setInvulnerable(invulnerable="Enable");
+    lastEntity.setInvisible(invisible="Enable");
+    lastEntity.setMovementAttribute(1.05, attr="Step height");
+    lastEntity.setMiscellaneousAttribute(0, attr="Name tag distance");
+    lastEntity.setEquipmentItem(item("paper").setModel("rpg:empty"), slot="Head");
+    rigSpawn(id, line body, loc(spawnAt.x, spawnAt.y, spawnAt.z), line app);
+    global rigInterp[id] = 4;
+    // Name label above the head.
+    game.spawnTextDisplay(loc(spawnAt.x, spawnAt.y, spawnAt.z), s"<white>%var(name)\n<gray><i>%math(0)");
+    line lb = lastEntity.uuid;
+    line title = roleTitle(role);
+    lastEntity.setTextDisplayText(s"<white>%var(name)\n<#C8B890><i>%var(title)");
+    lastEntity.setDisplayBillboard(type="Center");
+    lastEntity.setTextDisplayBackground("#000000", 25);
+    lastEntity.setDisplayScale(0.7, 0.7, 0.7);
+    lastEntity.setDisplayTranslation(0, 0.25 + ((line app["scale"] as num) - 1) * 1.8, 0);
+    lastEntity.setDisplayViewRange(0.3);
+    lastEntity.ride(line body);
+    global nList.append(id);
+    global nRole[id] = role;
+    global nName[id] = line name;
+    global nWork[id] = work;
+    global nHome[id] = home;
+    global nBody[id] = line body;
+    global nLabel[id] = line lb;
+    global nPos[id] = spawnAt;
+    global nPath[id] = [];
+    global nAct[id] = "idle";
+    global nNext[id] = now() + 20 + line h % 100;
+    global nNeeds[id] = [0.8, 0.2 + (line h % 30) / 100, 0.3];
+    global nYaw[id] = 0;
+    global nPhase[id] = 0;
+    global nStuck[id] = 0;
+    global nInside[id] = 0;
+}
+
+function npcCommand(words: list) {
+    line sub = "info";
+    if (words.len() >= 2) {
+        line sub = words[2] as str;
+    }
+    if (line sub == "spawn") {
+        start npcPopulateProc;
+    } else if (line sub == "clear") {
+        npcClear();
+    } else {
+        line n = global nList.len();
+        line h = num.round(hourNow() * 10) / 10;
+        default.sendMessage(s"<gray>%var(n) townsfolk. Hour %var(h).");
+    }
+}
+
+process npcPopulateProc {
+    worldPopulate();
+    allPlayers.sendMessage(s"<gray>The townsfolk are about.");
+}
+
+// ---------------------------------------------------------------- deciding
+
+/** Utility of each activity for NPC id; picks the best and plans a route. */
+function npcDecide(id: str) {
+    line role = global nRole[id];
+    line h = hourNow();
+    line needs = global nNeeds[id];
+    line energy = line needs[1] as num;
+    line hunger = line needs[2] as num;
+    line social = line needs[3] as num;
+    line night = 0;
+    if (line h >= 21 || line h < 6) {
+        line night = 1;
+    }
+    line pos = global nPos[id];
+    // Danger: monsters near flee-prone folk.
+    line danger = enemiesNear(line pos, 14).len();
+    line scores = {};
+    line scores["work"] = 0;
+    if (global nWork[id] != 0 && line h >= 7 && line h < 19) {
+        line scores["work"] = 0.9;
+    }
+    line scores["sleep"] = (1 - line energy) * 0.8 + line night * 0.9;
+    line scores["eat"] = line hunger * 0.9;
+    if ((line h >= 11 && line h < 13) || (line h >= 18 && line h < 20)) {
+        line scores["eat"] = (line scores["eat"] as num) + 0.3;
+    }
+    line scores["social"] = line social * 0.7;
+    if (line h >= 18 && line h < 23) {
+        line scores["social"] = (line scores["social"] as num) + 0.3;
+    }
+    line scores["wander"] = 0.25 + num.randomd(0, 0.2);
+    line scores["flee"] = 0;
+    if (line danger > 0 && role != "guard" && role != "captain") {
+        line scores["flee"] = 2;
+    }
+    if (role == "guard") {
+        line scores["patrol"] = 0.8 + (1 - line night) * 0.1;
+        line scores["work"] = 0;
+        line scores["sleep"] = (line scores["sleep"] as num) * 0.3;
+        if (line danger > 0) {
+            line scores["defend"] = 2;
+        }
+    }
+    if (role == "lord" || role == "librarian" || role == "archmage" || role == "smith" || role == "armorer" || role == "guildmaster" || role == "trainer" || role == "innkeeper" || role == "merchant" || role == "alchemist") {
+        // Shopkeepers mostly mind their shops so players can find them.
+        line scores["work"] = (line scores["work"] as num) + 0.6;
+        if (line night == 0) {
+            line scores["work"] = (line scores["work"] as num) + 0.5;
+        }
+    }
+    line best = "wander";
+    line bs = -1;
+    for (line k, line v of line scores) {
+        if ((line v as num) > line bs) {
+            line bs = line v as num;
+            line best = line k;
+        }
+    }
+    global nAct[id] = line best;
+    // Where to go.
+    line dest = line pos;
+    line enter = 0;
+    if (line best == "work") {
+        line dest = porchOf(global nWork[id]);
+        line enter = global nWork[id];
+    } else if (line best == "sleep" || line best == "flee") {
+        line hb = global nHome[id];
+        if (line best == "flee" && global nWork[id] != 0) {
+            line hb = global nWork[id];
+        }
+        line dest = porchOf(line hb);
+        line enter = line hb;
+    } else if (line best == "eat") {
+        line ti = bldOfType("tavern");
+        if (num.randomd(0, 1) < 0.5) {
+            line ti = bldOfType("inn");
+        }
+        line dest = porchOf(line ti);
+        line enter = line ti;
+    } else if (line best == "social") {
+        line dest = vec(global wCx + num.randomd(-11, 11), townY() + 1, global wCz + num.randomd(-11, 11));
+    } else if (line best == "patrol" || line best == "defend") {
+        if (line best == "defend") {
+            line tg = enemiesNear(line pos, 14);
+            line dest = global ePos[line tg[1]];
+        } else {
+            line gi = 1 + wHash(now(), num.parse(id.replace("n", "")), 9) % num.max(1, global wGates.len());
+            line g = global wGates[line gi];
+            line dest = vec((line g[1] as num) - num.cos(line g[3] as num) * 8, townY() + 1, (line g[2] as num) - num.sin(line g[3] as num) * 8);
+        }
+    } else {
+        line keys = global gNode.getKeys();
+        if (line keys.len() > 0) {
+            line dest = global gNode[line keys[1 + num.floor(num.randomd(0, line keys.len() - 0.01))] as str];
+        }
+    }
+    // Leave the building first if inside.
+    if (global nInside[id] != 0 && global nInside[id] != line enter) {
+        npcTeleport(id, porchOf(global nInside[id]));
+        global nInside[id] = 0;
+    }
+    if (global nInside[id] != 0 && global nInside[id] == line enter) {
+        global nPath[id] = [];
+    } else {
+        line path = route(global nPos[id], line dest);
+        line path.append(line dest);
+        global nPath[id] = line path;
+        global nPath[id] = line path;
+        global nTalk[id] = "enter:%var(enter)";
+    }
+    global nNext[id] = now() + 160 + num.floor(num.randomd(0, 200));
+}
+
+/** Teleports NPC id's body to p. */
+function npcTeleport(id: str, p: vec) {
+    select entitiesByName(global nBody[id]);
+    selectedEntity.teleport(loc(p.x, p.y, p.z));
+    select reset;
+    global nPos[id] = p;
+}
+
+// ---------------------------------------------------------------- moving
+
+/** Updates a quarter of the NPCs each tick: needs, decisions, walking and
+ * the rig's animation. Far from every player they stand still. */
+function npcTick {
+    clockTick();
+    if (global nReady == 0) {
+        return;
+    }
+    line n = global nList.len();
+    repeat (line i to n) {
+        if ((line i + global tick) % 4 == 0) {
+            npcStep(global nList[line i]);
+        }
+    }
+}
+
+function npcStep(id: str) {
+    line pos = global nPos[id];
+    line near = 999;
+    line nearP = "";
+    for (line uuid, line b of global pBody) {
+        line d = (bodyFeet(line uuid) - pos).len();
+        if (line d < near) {
+            line near = line d;
+            line nearP = line uuid;
+        }
+    }
+    if (line near > 80) {
+        return;
+    }
+    select entitiesByName(global nBody[id]);
+    line l = selectedEntity.location;
+    select reset;
+    line p = vec(line l.x, line l.y, line l.z);
+    line moved = (line p - pos).len();
+    global nPos[id] = line p;
+    // Needs drift every update (4 ticks).
+    line needs = global nNeeds[id];
+    line act = global nAct[id];
+    line e = line needs[1] as num;
+    line hu = line needs[2] as num;
+    line so = line needs[3] as num;
+    if (line act == "sleep" && global nInside[id] != 0) {
+        line e = num.min(1, line e + 0.01);
+    } else {
+        line e = num.max(0, line e - 0.0006);
+    }
+    if (line act == "eat" && global nInside[id] != 0) {
+        line hu = num.max(0, line hu - 0.02);
+    } else {
+        line hu = num.min(1, line hu + 0.0008);
+    }
+    if (line act == "social") {
+        line so = num.max(0, line so - 0.004);
+    } else {
+        line so = num.min(1, line so + 0.0005);
+    }
+    global nNeeds[id] = [line e, line hu, line so];
+    if (now() >= global nNext[id] || (line act != "flee" && enemiesNear(line p, 10).len() > 0 && global nRole[id] != "guard")) {
+        if (now() >= global nNext[id] - 120) {
+            npcDecide(id);
+        }
+    }
+    // Walk the path.
+    line path = global nPath[id] as list[vec];
+    line v = vec(0, 0, 0);
+    line speed = 0.11;
+    if (global nAct[id] == "flee") {
+        line speed = 0.2;
+    }
+    if (line path.len() > 0) {
+        line wp = line path[1];
+        line toW = vec(line wp.x - line p.x, 0, line wp.z - line p.z);
+        if (line toW.len() < 1.1) {
+            line path.remove(1);
+            global nPath[id] = line path;
+            if (line path.len() == 0) {
+                // Arrived: step inside if this was a building.
+                line tk = global nTalk[id];
+                if (line tk.startsWith("enter:")) {
+                    line bi = num.parse(line tk.replace("enter:", ""));
+                    if (line bi > 0) {
+                        npcTeleport(id, insideOf(line bi));
+                        global nInside[id] = line bi;
+                    }
+                }
+            }
+        } else {
+            line v = line toW.setLength(line speed);
+            global nYaw[id] = global nYaw[id] + num.clamp(wrapDeg(yawOf(line toW) - global nYaw[id]), -40, 40);
+        }
+        if (line moved < 0.02 && line toW.len() >= 1.1) {
+            global nStuck[id] = global nStuck[id] + 1;
+            if (global nStuck[id] > 6) {
+                npcTeleport(id, line wp);
+                global nStuck[id] = 0;
+            }
+        } else {
+            global nStuck[id] = 0;
+        }
+    }
+    // Face a player who comes close.
+    line greet = 0;
+    if (line near < 4 && line path.len() == 0 && line nearP != "") {
+        line f = bodyFeet(line nearP);
+        global nYaw[id] = global nYaw[id] + num.clamp(wrapDeg(yawOf(vec(f.x - line p.x, 0, f.z - line p.z)) - global nYaw[id]), -30, 30);
+        line greet = 1;
+    }
+    line vy = -0.08;
+    select entitiesByName(global nBody[id]);
+    selectedEntity.setVelocity(vec(line v.x, line vy, line v.z));
+    select reset;
+    // Animate only when someone can see it.
+    if (line near < 48) {
+        line sp = line v.len();
+        line ph = (global nPhase[id] + line sp * 230 * 4) % 360;
+        global nPhase[id] = line ph;
+        line pose = locoPose(line sp, 1, line ph, global tick, 0, 0);
+        if (line greet == 1) {
+            // A small wave.
+            line pose[9] = 150 + num.sin(global tick * 25) * 20;
+            line pose[11] = 20;
+        }
+        if (global nAct[id] == "social" && line path.len() == 0) {
+            line pose[6] = 30 + num.sin(global tick * 9) * 25;
+        }
+        rigRender(id, global nYaw[id], line pose);
+    }
+}
+
+/** F: talk to the NPC nearest the player (within 4 blocks). */
+function interact {
+    line uuid = default.uuid;
+    line f = bodyFeet(line uuid);
+    line best = "";
+    line bd = 4;
+    for (line id of global nList) {
+        line d = (global nPos[line id] - f).len();
+        if (line d < line bd) {
+            line bd = line d;
+            line best = line id;
+        }
+    }
+    if (line best == "") {
+        sendBar(line uuid, "<gray>No one to talk to here.");
+        return;
+    }
+    talkTo(line best);
+}

@@ -1,0 +1,826 @@
+// Word magic (PLAN.md, "Magic: words are physical").
+//
+// A spell is a phrase of Latin words. spellCompile turns the phrase into
+// numbers: every word changes the shape, power, size, speed, count, range,
+// duration or behaviour of the cast, so any combination of learned words
+// does something. Elements set the damage type, color and status; forms
+// set how it travels; verbs what it does; modifiers scale it. Every word
+// adds mana cost.
+
+/** Word data: [class, English gloss, base mana]. Classes: elem, form, verb,
+ * mod. */
+function wordData(w: str): list {
+    line d = {
+        ignis: ["elem", "Fire", 4], glacies: ["elem", "Frost", 4], fulmen: ["elem", "Lightning", 5],
+        aqua: ["elem", "Water", 3], terra: ["elem", "Stone", 4], ventus: ["elem", "Wind", 3],
+        lux: ["elem", "Light", 5], umbra: ["elem", "Shadow", 5], venenum: ["elem", "Venom", 4], vita: ["elem", "Life", 5],
+        sagitta: ["form", "Arrow", 2], globus: ["form", "Orb", 3], radius: ["form", "Beam", 4], anulus: ["form", "Nova", 4],
+        murus: ["form", "Wall", 5], pluvia: ["form", "Rain", 6], nubes: ["form", "Cloud", 5], lancea: ["form", "Lance", 4],
+        scutum: ["form", "Ward", 4],
+        ferio: ["verb", "Striking", 1], sano: ["verb", "Healing", 4], traho: ["verb", "Pulling", 3], pello: ["verb", "Pushing", 3],
+        ligo: ["verb", "Binding", 4], volo: ["verb", "Flight", 4], voco: ["verb", "Summoning", 8],
+        magnus: ["mod", "Great", 3], parvus: ["mod", "Lesser", 0], celer: ["mod", "Swift", 2], tardus: ["mod", "Slow", 1],
+        multus: ["mod", "Many", 5], geminus: ["mod", "Twin", 3], longus: ["mod", "Far", 2], fortis: ["mod", "Mighty", 4],
+        sequens: ["mod", "Seeking", 3], rumpens: ["mod", "Bursting", 4], perforans: ["mod", "Piercing", 3],
+        recurrens: ["mod", "Ricocheting", 4], mora: ["mod", "Charged", 2]
+    };
+    if (line d.hasKeys(w)) {
+        return line d[w] as list;
+    }
+    return [];
+}
+
+/** Every word, in the library's order (cheapest first). */
+function allWords(): list[str] {
+    return ["ignis", "sagitta", "ferio", "aqua", "ventus", "globus", "parvus", "celer", "glacies", "terra", "anulus", "pello",
+        "traho", "longus", "geminus", "fulmen", "venenum", "lancea", "sano", "vita", "tardus", "fortis", "magnus", "radius",
+        "nubes", "scutum", "ligo", "sequens", "perforans", "lux", "umbra", "murus", "volo", "rumpens", "multus", "recurrens",
+        "mora", "pluvia", "voco"];
+}
+
+/** Library price of word w (gold) and the INT needed to learn it. */
+function wordPrice(w: str): list[num] {
+    line i = allWords().find(w);
+    return [num.round(20 + line i * line i * 3.2), num.floor(line i / 3) + 4];
+}
+
+/** Element data: [damage type, color, status, MiniMessage color]. */
+function elemData(e: str): list {
+    line d = {
+        ignis: ["fire", 0xFF6A1A, "burn"], glacies: ["ice", 0x9EE8FF, "chill"], fulmen: ["lightning", 0xFFF06A, "shock"],
+        aqua: ["water", 0x3A8CFF, "soak"], terra: ["earth", 0xA07A4A, "stun"], ventus: ["wind", 0xC8FFE0, "gust"],
+        lux: ["light", 0xFFFBD0, "holy"], umbra: ["shadow", 0x8A4AE0, "drain"], venenum: ["poison", 0x7ACC3A, "poison"],
+        vita: ["life", 0x7AFF9A, "mend"]
+    };
+    if (line d.hasKeys(e)) {
+        return line d[e] as list;
+    }
+    return ["arcane", 0xE080FF, ""];
+}
+
+/** Compiles a phrase for player uuid (0 extra cost) into a spell dict, or
+ * {err: message}. Repeated words count with diminishing returns. */
+function spellCompile(uuid: str, phrase: str, checkKnown: num): dict {
+    line words: list[str] = phrase.setCase(case="lowercase").split(" ");
+    line known = pdGet(uuid, "words") as list[str];
+    line elems: list[str] = [];
+    line form = "";
+    line verbs: list[str] = [];
+    line seen = {};
+    line sp = {power: 1, size: 1, speed: 1, count: 1, range: 1, dur: 1, homing: 0, pierce: 0, bounce: 0, burst: 0, delay: 0, costMul: 1, castMul: 1, spread: 8};
+    line base = 3;
+    line n = 0;
+    line gloss = "";
+    for (line w of line words) {
+        if (line w != "") {
+            line wd = wordData(line w);
+            if (line wd.len() == 0) {
+                return {err: "\"%var(w)\" is not a word of power."};
+            }
+            if (checkKnown == 1 && line known.find(line w) == 0) {
+                return {err: "You have not learned \"%var(w)\"."};
+            }
+            line n += 1;
+            line rep = 1;
+            if (line seen.hasKeys(line w)) {
+                line rep = (line seen[line w] as num) + 1;
+            }
+            line seen[line w] = line rep;
+            line k = 1 / line rep;
+            line base += (line wd[3] as num) * line k;
+            line cls = line wd[1] as str;
+            if (line cls == "elem") {
+                if (line rep == 1) {
+                    line elems.append(line w);
+                } else {
+                    line sp["power"] = (line sp["power"] as num) * (1 + 0.2 * line k);
+                }
+            } else if (line cls == "form") {
+                if (line form == "") {
+                    line form = line w;
+                } else {
+                    // A second form makes the first one bigger.
+                    line sp["size"] = (line sp["size"] as num) * 1.2;
+                }
+            } else if (line cls == "verb") {
+                if (line rep == 1) {
+                    line verbs.append(line w);
+                }
+            } else {
+                line sp = spellMod(line sp, line w, line k);
+            }
+        }
+    }
+    if (line n == 0) {
+        return {err: "Speak at least one word."};
+    }
+    if (line n > 8) {
+        return {err: "A phrase can hold at most eight words."};
+    }
+    if (line form == "") {
+        line form = "touch";
+        if (line elems.len() > 0 || line verbs.find("ferio") != 0) {
+            line form = "sagitta";
+        }
+        if (line verbs.find("sano") != 0 && line elems.len() == 0) {
+            line form = "touch";
+        }
+    }
+    if (line verbs.len() == 0) {
+        line verbs.append("ferio");
+    }
+    // Form shapes.
+    line fd = {
+        sagitta: [1, 1.4, 1, 1], globus: [1.1, 0.7, 1.3, 1.1], radius: [0.9, 0, 1.2, 1], anulus: [0.9, 0, 1.3, 1.2],
+        murus: [0.6, 0, 1.5, 1.4], pluvia: [0.5, 0, 1.8, 1.5], nubes: [0.3, 0, 1.5, 1.3], lancea: [1.25, 2.2, 1.4, 1.1],
+        scutum: [1, 0, 1.2, 0.9], touch: [0.9, 0, 0.8, 0.8]
+    };
+    line f = line fd[line form] as list[num];
+    line sp["power"] = (line sp["power"] as num) * line f[1];
+    line sp["baseSpeed"] = line f[2];
+    line sp["costMul"] = (line sp["costMul"] as num) * line f[3];
+    line sp["castMul"] = (line sp["castMul"] as num) * line f[4];
+    if (line form == "lancea") {
+        line sp["pierce"] = (line sp["pierce"] as num) + 3;
+    }
+    if (line form == "globus") {
+        line sp["burst"] = (line sp["burst"] as num) + 2.2;
+    }
+    if (line form == "radius") {
+        line sp["pierce"] = 99;
+    }
+    // Elements: the first sets the look; each one adds its status. Mixing
+    // costs more but strikes harder.
+    line el = "arcane";
+    line color = 0xE080FF;
+    if (line elems.len() > 0) {
+        line ed = elemData(line elems[1]);
+        line el = line ed[1] as str;
+        line color = line ed[2] as num;
+        if (line elems.len() > 1) {
+            line e2 = elemData(line elems[2]);
+            line color = blendColor(line color, line e2[2] as num);
+            line sp["power"] = (line sp["power"] as num) * (1 + 0.15 * (line elems.len() - 1));
+            line sp["costMul"] = (line sp["costMul"] as num) * (1 + 0.3 * (line elems.len() - 1));
+        }
+    }
+    if (line elems.find("fulmen") != 0) {
+        line sp["bounce"] = (line sp["bounce"] as num) + 1;
+        line sp["speed"] = (line sp["speed"] as num) * 1.2;
+    }
+    if (line elems.find("terra") != 0) {
+        line sp["power"] = (line sp["power"] as num) * 1.3;
+        line sp["speed"] = (line sp["speed"] as num) * 0.75;
+    }
+    if (line elems.find("ventus") != 0) {
+        line sp["speed"] = (line sp["speed"] as num) * 1.4;
+    }
+    line sp["elems"] = line elems;
+    line sp["elem"] = line el;
+    line sp["color"] = line color;
+    line sp["form"] = line form;
+    line sp["verbs"] = line verbs;
+    line sp["phrase"] = phrase.setCase(case="lowercase");
+    line sp["words"] = line n;
+    // Cost and power from the caster.
+    line eff = stat(uuid, "eff");
+    line cost = line base * (sp["costMul"] as num) * (1 - 0.6 * line eff);
+    line sp["cost"] = num.max(1, num.round(line cost));
+    line lvl = pdGet(uuid, "lvl") as num;
+    line dmg = 9 * (sp["power"] as num) * stat(uuid, "spell") * (1 + line lvl * 0.04);
+    line sp["dmg"] = num.round(line dmg * 10) / 10;
+    line sp["cast"] = num.max(6, num.round(14 * (sp["castMul"] as num) + (sp["delay"] as num)));
+    line sp["name"] = spellName(line sp);
+    return line sp;
+}
+
+/** Applies modifier word w with strength k (1, 1/2, 1/3 for repeats). */
+function spellMod(sp: dict, w: str, k: num): dict {
+    line s = sp;
+    if (w == "magnus") {
+        line s["size"] = (s["size"] as num) * (1 + 0.6 * k);
+        line s["power"] = (s["power"] as num) * (1 + 0.25 * k);
+        line s["costMul"] = (s["costMul"] as num) * (1 + 0.5 * k);
+    } else if (w == "parvus") {
+        line s["size"] = (s["size"] as num) * (1 - 0.4 * k);
+        line s["speed"] = (s["speed"] as num) * (1 + 0.2 * k);
+        line s["costMul"] = (s["costMul"] as num) * (1 - 0.3 * k);
+        line s["castMul"] = (s["castMul"] as num) * (1 - 0.2 * k);
+    } else if (w == "celer") {
+        line s["speed"] = (s["speed"] as num) * (1 + 0.8 * k);
+        line s["castMul"] = (s["castMul"] as num) * (1 - 0.3 * k);
+        line s["costMul"] = (s["costMul"] as num) * (1 + 0.2 * k);
+    } else if (w == "tardus") {
+        line s["speed"] = (s["speed"] as num) * (1 - 0.5 * k);
+        line s["dur"] = (s["dur"] as num) * (1 + 1 * k);
+        line s["costMul"] = (s["costMul"] as num) * (1 + 0.1 * k);
+    } else if (w == "multus") {
+        line s["count"] = (s["count"] as num) + num.round(2 * k);
+        line s["power"] = (s["power"] as num) * (1 - 0.2 * k);
+        line s["costMul"] = (s["costMul"] as num) * (1 + 0.6 * k);
+    } else if (w == "geminus") {
+        line s["count"] = (s["count"] as num) + num.max(1, num.round(k));
+        line s["costMul"] = (s["costMul"] as num) * (1 + 0.3 * k);
+    } else if (w == "longus") {
+        line s["range"] = (s["range"] as num) * (1 + 0.6 * k);
+        line s["costMul"] = (s["costMul"] as num) * (1 + 0.15 * k);
+    } else if (w == "fortis") {
+        line s["power"] = (s["power"] as num) * (1 + 0.5 * k);
+        line s["costMul"] = (s["costMul"] as num) * (1 + 0.6 * k);
+    } else if (w == "sequens") {
+        line s["homing"] = (s["homing"] as num) + k;
+        line s["costMul"] = (s["costMul"] as num) * (1 + 0.3 * k);
+    } else if (w == "rumpens") {
+        line s["burst"] = (s["burst"] as num) + 2 * k;
+        line s["costMul"] = (s["costMul"] as num) * (1 + 0.4 * k);
+    } else if (w == "perforans") {
+        line s["pierce"] = (s["pierce"] as num) + num.max(1, num.round(2 * k));
+        line s["costMul"] = (s["costMul"] as num) * (1 + 0.25 * k);
+    } else if (w == "recurrens") {
+        line s["bounce"] = (s["bounce"] as num) + num.max(1, num.round(2 * k));
+        line s["costMul"] = (s["costMul"] as num) * (1 + 0.35 * k);
+    } else if (w == "mora") {
+        line s["delay"] = (s["delay"] as num) + 20 * k;
+        line s["power"] = (s["power"] as num) * (1 + 1 * k);
+        line s["costMul"] = (s["costMul"] as num) * (1 + 0.2 * k);
+    }
+    return line s;
+}
+
+/** Average of two 0xRRGGBB colors. */
+function blendColor(a: num, b: num): num {
+    line r = num.floor((num.floor(a / 65536) + num.floor(b / 65536)) / 2);
+    line g = num.floor((num.floor(a / 256) % 256 + num.floor(b / 256) % 256) / 2);
+    line bl = num.floor((a % 256 + b % 256) / 2);
+    return line r * 65536 + line g * 256 + line bl;
+}
+
+/** An English name for compiled spell sp: "Great Swift Fire Lance of
+ * Binding". */
+function spellName(sp: dict): str {
+    line adj = "";
+    for (line wa of (sp["phrase"] as str).split(" ")) {
+        line wd = wordData(line wa as str);
+        if (line wd.len() > 0 && line wd[1] == "mod" && line adj.contains(line wd[2] as str) == 0) {
+            line g = line wd[2] as str;
+            line adj = "%var(adj)%var(g) ";
+        }
+    }
+    line el = "";
+    for (line e of sp["elems"] as list[str]) {
+        line g = wordData(line e)[2] as str;
+        line el = "%var(el)%var(g) ";
+    }
+    line form = sp["form"] as str;
+    line fname = "Touch";
+    if (line form != "touch") {
+        line fname = wordData(line form)[2] as str;
+    }
+    line out = "%var(adj)%var(el)%var(fname)";
+    for (line v of sp["verbs"] as list[str]) {
+        if (line v != "ferio") {
+            line g = wordData(line v)[2] as str;
+            line out = "%var(out) of %var(g)";
+        }
+    }
+    return line out;
+}
+
+/** A short description of spell sp for the Spell Loom and tooltips. */
+function spellInfo(sp: dict): str {
+    line form = sp["form"] as str;
+    line cost = sp["cost"];
+    line dmg = sp["dmg"];
+    line out = "Mana %var(cost) | Power %var(dmg)";
+    line cnt = sp["count"] as num;
+    if (line cnt > 1) {
+        line out = "%var(out) x%var(cnt)";
+    }
+    if ((sp["homing"] as num) > 0) { line out = "%var(out) | seeking"; }
+    if ((sp["pierce"] as num) > 0 && form != "radius") { line out = "%var(out) | pierces"; }
+    if ((sp["bounce"] as num) > 0) { line out = "%var(out) | chains"; }
+    if ((sp["burst"] as num) > 0) { line out = "%var(out) | bursts"; }
+    if ((sp["delay"] as num) > 0) { line out = "%var(out) | charged"; }
+    line ct = num.round((sp["cast"] as num) / 2) / 10;
+    return "%var(out) | cast %var(ct)s";
+}
+
+// ---------------------------------------------------------------- casting
+
+/** Per player: the spell being cast (for the "cast" action). */
+declare global pCasting: dict[dict];
+/** Per player: ward points and the tick the ward ends. */
+declare global pWard: dict[num];
+declare global pWardUntil: dict[num];
+/** Spell zones: walls, rain, clouds. */
+declare global zones: list[dict];
+/** Familiars: {id, owner, until, next, sp}. */
+declare global familiars: list[dict];
+
+/** Starts casting compiled spell sp (player uuid, default selected).
+ * costMul scales the mana (spoken incantations cost more). */
+function castStart(uuid: str, sp: dict, costMul: num) {
+    if (sp.hasKeys("err")) {
+        line e = sp["err"] as str;
+        sendBar(uuid, "<red>%var(e)");
+        return;
+    }
+    line a = global pAct[uuid];
+    if (line a != "" && line a != "hurt") {
+        return;
+    }
+    line cost = num.round((sp["cost"] as num) * costMul);
+    if (manaUse(uuid, line cost) == 0) {
+        sendBar(uuid, "<#4AA3FF>Not enough mana (%var(cost))");
+        return;
+    }
+    global pCasting[uuid] = sp;
+    actStart(uuid, "cast", sp["cast"] as num);
+    // A rune circle under the caster.
+    line f = bodyFeet(uuid);
+    game.spawnItemDisplay(loc(f.x, f.y + 0.05, f.z), fxItem("rpg:fx/rune", sp["color"] as num));
+    line id = lastEntity.uuid;
+    lastEntity.setDisplayBrightness(15, 15);
+    rigSetMatrix(line id, basisMatrix(vec(1, 0, 0), vec(0, 1, 0), vec(0, 0, 1), 0.3, 0.3, 0.3, vec(0, 0, 0)), 0);
+    global fxPend.append([line id, "mat", basisMatrix(vec(0, 0, 1), vec(0, 1, 0), vec(-1, 0, 0), 1.6, 1.6, 1.6, vec(0, 0, 0)), sp["cast"] as num]);
+    fxKeep(line id, (sp["cast"] as num) + 6);
+    allPlayers.playSound(snd("Evoker Prepare Summon", 0.5, 1.4), loc(f.x, f.y + 1, f.z));
+}
+
+/** The staff or wand light attack: a cheap arcane bolt. */
+function castBolt(uuid: str) {
+    if (global pAct[uuid] != "") {
+        return;
+    }
+    line sp = spellCompile(uuid, "sagitta celer", 0);
+    line sp["cost"] = 2;
+    line sp["dmg"] = num.round(meleeDamage(uuid) * 1.2 * stat(uuid, "spell") * 10) / 10;
+    line sp["cast"] = 8;
+    line sp["name"] = "Arcane Bolt";
+    castStart(uuid, line sp, 1);
+}
+
+/** The cast's release frame: the spell happens. */
+function castRelease(uuid: str) {
+    if (!global pCasting.hasKeys(uuid)) {
+        return;
+    }
+    line sp = global pCasting[uuid];
+    line feet = bodyFeet(uuid);
+    line origin = line feet + vec(0, 1.5, 0) + yawFwd(global pYaw[uuid]) * 0.6;
+    line aim = playerAim(uuid);
+    spellExec(uuid, line sp, line origin, line aim);
+}
+
+/** Executes spell sp of player owner from origin toward aim. */
+function spellExec(owner: str, sp: dict, origin: vec, aim: vec) {
+    line form = sp["form"] as str;
+    line verbs = sp["verbs"] as list[str];
+    line color = sp["color"] as num;
+    line elem = sp["elem"] as str;
+    line dir = (aim - origin).setLength(1);
+    line size = sp["size"] as num;
+    line feet = bodyFeet(owner);
+    // Verbs that act on the caster.
+    if (verbs.find("voco") != 0) {
+        spawnFamiliar(owner, sp);
+        return;
+    }
+    if (verbs.find("volo") != 0) {
+        line push = vec(dir.x, num.max(0.25, dir.y + 0.2), dir.z).setLength(1.3 * (sp["speed"] as num));
+        global pPush[owner] = vec(line push.x, 0, line push.z);
+        global pIframe[owner] = now() + 8;
+        select entitiesByName(global pBody[owner]);
+        selectedEntity.setVelocity(line push);
+        select reset;
+        actStart(owner, "dodge", 10);
+        fxBurst(feet + vec(0, 0.5, 0), elem, 0.8);
+    }
+    if (verbs.find("sano") != 0) {
+        line heal = (sp["dmg"] as num) * 1.4;
+        for (line uuid, line b of global pBody) {
+            if ((bodyFeet(line uuid) - feet).len() < 6 * size) {
+                global pHp[line uuid] = num.min(stat(line uuid, "maxHp"), global pHp[line uuid] + line heal);
+                global pPoison[line uuid] = 0;
+                fxText(bodyFeet(line uuid) + vec(0, 2.2, 0), "<#7AFF9A>+%math(round(%var(heal)))", 0);
+                fxBurst(bodyFeet(line uuid) + vec(0, 1, 0), "life", 0.7);
+            }
+        }
+        if (verbs.find("ferio") == 0 && verbs.len() == 1 && form == "touch") {
+            return;
+        }
+    }
+    line cnt = sp["count"] as num;
+    if (form == "sagitta" || form == "globus" || form == "lancea") {
+        line model = "rpg:fx/bolt";
+        if (form == "globus") {
+            line model = "rpg:fx/orb";
+        }
+        line speed = (sp["baseSpeed"] as num) * (sp["speed"] as num);
+        line spread = sp["spread"] as num;
+        repeat (line i to cnt) {
+            line ang = ((line i - 1) - (cnt - 1) / 2) * line spread;
+            line d = dir.rotateAroundVec(vec(0, 1, 0), line ang);
+            line life = num.round(24 * (sp["range"] as num) / num.max(0.3, line speed)) + 4;
+            projSpawn(owner, origin, line d * line speed, "spell", {dmg: sp["dmg"], grav: 0, radius: 0.35 * size + 0.1, model: line model, color: color, life: line life, elem: elem, homing: sp["homing"], pierce: sp["pierce"], bounce: sp["bounce"], burst: (sp["burst"] as num) * size, scale: 0.7 * size, spell: sp});
+        }
+        allPlayers.playSound(snd("Blaze Shoot", 0.5, 1.3), loc(origin.x, origin.y, origin.z));
+    } else if (form == "radius") {
+        spellBeam(owner, sp, origin, dir);
+    } else if (form == "anulus") {
+        line r = 4 * size * (sp["range"] as num);
+        line c = feet + vec(0, 1, 0);
+        for (line id of enemiesNear(line c, line r + 1)) {
+            spellHit(owner, sp, line id, line c, 1);
+        }
+        fxExpandRing(feet + vec(0, 0.3, 0), line r, color);
+        fxRing(feet, elem, line r * 0.5);
+        fxRing(feet, elem, line r);
+        allPlayers.playSound(snd("Ender Dragon Flap", 0.6, 1.4), loc(feet.x, feet.y, feet.z));
+    } else if (form == "touch") {
+        line c = feet + vec(0, 1.1, 0) + yawFwd(global pYaw[owner]) * 1.8;
+        for (line id of enemiesNear(line c, 1.8 * size + 0.5)) {
+            spellHit(owner, sp, line id, feet, 1);
+        }
+        fxBurst(line c, elem, 0.8 * size);
+    } else if (form == "scutum") {
+        line amt = (sp["dmg"] as num) * 3 * size;
+        global pWard[owner] = line amt;
+        global pWardUntil[owner] = now() + num.round(200 * (sp["dur"] as num));
+        fxExpandRing(feet + vec(0, 1, 0), 1.4, color);
+        sendBar(owner, "<#9EE8FF>Ward: %math(round(%var(amt)))");
+        if (elem != "arcane" && elem != "life") {
+            zoneAdd({kind: "aura", owner: owner, pos: feet, r: 2.5 * size, until: global pWardUntil[owner], next: 0, sp: sp});
+        }
+    } else {
+        // Ground forms at the aimed point (no further than their range).
+        line maxR = 14 * (sp["range"] as num);
+        line tgt = aim;
+        if ((tgt - origin).len() > line maxR) {
+            line tgt = origin + dir * line maxR;
+        }
+        line gy = groundUnder(tgt);
+        line tgt = vec(tgt.x, line gy, tgt.z);
+        line dur = num.round(120 * (sp["dur"] as num));
+        if (form == "murus") {
+            line side = vec(0 - dir.z, 0, dir.x).setLength(1);
+            zoneAdd({kind: "wall", owner: owner, pos: tgt, side: line side, len: 4 * size, until: now() + line dur, next: 0, sp: sp});
+            repeat (line i to 7) {
+                line p = tgt + line side * ((line i - 4) * 0.65 * size);
+                game.spawnItemDisplay(loc(line p.x, line p.y, line p.z), fxItem("rpg:fx/shard", color));
+                line id = lastEntity.uuid;
+                lastEntity.setDisplayBrightness(15, 15);
+                rigSetMatrix(line id, basisMatrix(vec(1, 0, 0), vec(0, 1, 0), vec(0, 0, 1), 0.3, 0.05, 0.3, vec(0, 0, 0)), 0);
+                line sc = (1 + (wHash(line i, now(), 1) % 5) / 10) * size;
+                global fxPend.append([line id, "mat", basisMatrix(vec(1, 0, 0), vec(0, 1, 0), vec(0, 0, 1), line sc, line sc * 1.4, line sc, vec(0, 0, 0)), 4]);
+                fxKeep(line id, line dur);
+            }
+            allPlayers.playSound(snd("Anvil Land", 0.4, 0.6), loc(tgt.x, tgt.y, tgt.z));
+        } else if (form == "pluvia") {
+            zoneAdd({kind: "rain", owner: owner, pos: tgt, r: 3 * size, until: now() + num.round(40 * (sp["dur"] as num)) + 10, next: 0, sp: sp});
+        } else if (form == "nubes") {
+            zoneAdd({kind: "cloud", owner: owner, pos: tgt, r: 3 * size, until: now() + line dur, next: 0, sp: sp});
+        }
+    }
+}
+
+/** Ground height under p (first solid block below, within 12). */
+function groundUnder(p: vec): num {
+    line stop = game.raycast(loc(p.x, p.y + 2, p.z, 90, 0), 16, blockCollision="Solid blocks");
+    return stop.y;
+}
+
+/** A beam: instant, hits everything along it up to its range. */
+function spellBeam(owner: str, sp: dict, origin: vec, dir: vec) {
+    line range = 22 * (sp["range"] as num);
+    line stop = game.raycast(loc(origin.x, origin.y, origin.z).setDirection(dir), range, blockCollision="Solid blocks");
+    line end = vec(stop.x, stop.y, stop.z);
+    line w = 0.6 * (sp["size"] as num);
+    for (line id of enemiesNear((origin + line end) * 0.5, (line end - origin).len() / 2 + 2)) {
+        if (segDist3(enemyCenter(line id), origin, line end) < line w + enemyRadius(line id)) {
+            spellHit(owner, sp, line id, origin, 1);
+        }
+    }
+    // A bright rod from the hand to the end, fading quickly.
+    line L = (line end - origin).len();
+    line mid = (origin + line end) * 0.5;
+    game.spawnItemDisplay(loc(line mid.x, line mid.y, line mid.z), fxItem("rpg:fx/cube", sp["color"] as num));
+    line id = lastEntity.uuid;
+    lastEntity.setDisplayBrightness(15, 15);
+    line c = dir;
+    line up = vec(0, 1, 0);
+    if (num.abs(c.y) > 0.98) {
+        line up = vec(1, 0, 0);
+    }
+    line a = line up.cross(c).setLength(1);
+    line b = c.cross(line a);
+    rigSetMatrix(line id, basisMatrix(line a, line b, c, w * 0.5, w * 0.5, L, vec(0, 0, 0)), 0);
+    global fxPend.append([line id, "mat", basisMatrix(line a, line b, c, 0.02, 0.02, L, vec(0, 0, 0)), 5]);
+    fxKeep(line id, 6);
+    fxBurst(line end, sp["elem"] as str, 0.6);
+    allPlayers.playSound(snd("Lightning Impact", 0.25, 1.8), loc(origin.x, origin.y, origin.z));
+}
+
+/** An expanding ring effect at p out to radius r. */
+function fxExpandRing(p: vec, r: num, color: num) {
+    game.spawnItemDisplay(loc(p.x, p.y, p.z), fxItem("rpg:fx/ring", color));
+    line id = lastEntity.uuid;
+    lastEntity.setDisplayBrightness(15, 15);
+    rigSetMatrix(line id, basisMatrix(vec(1, 0, 0), vec(0, 1, 0), vec(0, 0, 1), 0.2, 0.2, 0.2, vec(0, 0, 0)), 0);
+    global fxPend.append([line id, "mat", basisMatrix(vec(1, 0, 0), vec(0, 1, 0), vec(0, 0, 1), r, r, r, vec(0, 0, 0)), 5]);
+    fxKeep(line id, 7);
+}
+
+/** Spell sp of owner hits enemy id (from `from`), at share k of its power. */
+function spellHit(owner: str, sp: dict, id: str, from: vec, k: num) {
+    if (enemyAlive(id) == 0) {
+        return;
+    }
+    line verbs = sp["verbs"] as list[str];
+    line elem = sp["elem"] as str;
+    line dmg = (sp["dmg"] as num) * k;
+    if (verbs.find("ferio") == 0 && verbs.find("sano") != 0) {
+        line dmg = 0;
+    }
+    line t = global eType[id];
+    line undead = (t == "skeleton" || t == "archer" || t == "ghoul" || t == "cryptlord");
+    for (line e of sp["elems"] as list[str]) {
+        if (line e == "lux" && line undead) {
+            line dmg = line dmg * 2;
+        }
+    }
+    line crit = 0;
+    if (num.randomd(0, 1) < stat(owner, "crit") * 0.6) {
+        line crit = 1;
+        line dmg = line dmg * 1.6;
+    }
+    line knock = 0.15;
+    if (verbs.find("pello") != 0) {
+        line knock = 1.3;
+    }
+    for (line e of sp["elems"] as list[str]) {
+        if (line e == "ventus" || line e == "aqua") {
+            line knock = line knock + 0.4;
+        }
+    }
+    line c = enemyCenter(id);
+    if (line dmg > 0) {
+        hitEnemy(id, line dmg, line crit, from, line knock, owner, elem);
+    }
+    if (enemyAlive(id) == 0) {
+        return;
+    }
+    if (verbs.find("traho") != 0) {
+        line f = bodyFeet(owner);
+        select entitiesByName(id);
+        selectedEntity.setVelocity(vec(f.x - line c.x, 0, f.z - line c.z).setLength(1.1) + vec(0, 0.35, 0));
+        select reset;
+    }
+    if (verbs.find("ligo") != 0) {
+        enemyStatus(id, "root", num.round(40 * (sp["dur"] as num)), 0);
+        fxRing(line c - vec(0, 0.8, 0), elem, 0.8);
+    }
+    // Element statuses.
+    line base = sp["dmg"] as num;
+    for (line e of sp["elems"] as list[str]) {
+        if (line e == "ignis") {
+            enemyStatus(id, "burn", num.round(80 * (sp["dur"] as num)), num.max(1, num.round(base * 0.12)));
+        } else if (line e == "glacies") {
+            enemyStatus(id, "chill", num.round(60 * (sp["dur"] as num)), 0);
+        } else if (line e == "venenum") {
+            enemyStatus(id, "poison", num.round(120 * (sp["dur"] as num)), num.max(1, num.round(base * 0.1)));
+        } else if (line e == "terra") {
+            if (num.randomd(0, 1) < 0.35) {
+                enemyStatus(id, "stun", 20, 0);
+            }
+        } else if (line e == "umbra") {
+            global pHp[owner] = num.min(stat(owner, "maxHp"), global pHp[owner] + line dmg * 0.15);
+        } else if (line e == "vita") {
+            global pHp[owner] = num.min(stat(owner, "maxHp"), global pHp[owner] + line dmg * 0.1);
+        }
+    }
+}
+
+/** Where a spell projectile lands: direct hit and burst. */
+function spellImpact(q: dict, at: vec, id: str) {
+    line sp = q["spell"] as dict;
+    line owner = q["owner"] as str;
+    if (id != "") {
+        spellHit(owner, line sp, id, at - (q["vel"] as vec), 1);
+    }
+    line burst = pNum(q, "burst");
+    if (burst > 0) {
+        for (line other of enemiesNear(at, burst + 0.5)) {
+            if (line other != id) {
+                spellHit(owner, line sp, line other, at, 0.7);
+            }
+        }
+        fxBurst(at, q["elem"] as str, burst * 0.6);
+        fxExpandRing(at, burst, line sp["color"] as num);
+        allPlayers.playSound(snd("Explode", 0.4, 1.5), loc(at.x, at.y, at.z));
+    } else {
+        fxBurst(at, q["elem"] as str, 0.5);
+    }
+}
+
+// ---------------------------------------------------------------- zones
+
+/** Adds a spell zone. */
+function zoneAdd(z: dict) {
+    global zones.append(z);
+}
+
+/** Zones act every 5 ticks: walls and clouds hurt what is in them, rain
+ * drops bolts, auras burn around their caster. */
+function zoneTick {
+    if (global zones.len() == 0 || now() % 5 != 0) {
+        return;
+    }
+    line keep: list[dict] = [];
+    for (line z of global zones) {
+        if ((line z["until"] as num) > now()) {
+            line keep.append(line z);
+            line kind = line z["kind"] as str;
+            line sp = line z["sp"] as dict;
+            line owner = line z["owner"] as str;
+            line p = line z["pos"] as vec;
+            line elem = line sp["elem"] as str;
+            if (line kind == "wall") {
+                line side = line z["side"] as vec;
+                line half = (line z["len"] as num) / 2;
+                for (line id of enemiesNear(line p, line half + 2)) {
+                    if (segDist3(global ePos[line id], line p - line side * line half, line p + line side * line half) < 1.3) {
+                        if (now() % 15 == 0) {
+                            spellHit(owner, line sp, line id, line p, 0.4);
+                        }
+                        enemyStatus(line id, "root", 6, 0);
+                    }
+                }
+            } else if (line kind == "rain") {
+                line r = line z["r"] as num;
+                line a = num.randomd(0, 360);
+                line d = num.randomd(0, r);
+                line top = line p + vec(num.cos(line a) * line d, 9, num.sin(line a) * line d);
+                projSpawn(owner, line top, vec(0, -1.1, 0), "spell", {dmg: (line sp["dmg"] as num) * 0.6, grav: 0, radius: 0.5, model: "rpg:fx/bolt", color: line sp["color"], life: 14, elem: elem, burst: 1.2, scale: 0.6, spell: line sp});
+            } else if (line kind == "cloud") {
+                line r = line z["r"] as num;
+                fxBurst(line p + vec(0, 1, 0), elem, line r * 0.6);
+                if (now() % 10 == 0) {
+                    for (line id of enemiesNear(line p + vec(0, 1, 0), line r + 0.5)) {
+                        spellHit(owner, line sp, line id, line p, 0.35);
+                    }
+                }
+            } else if (line kind == "aura") {
+                line f = bodyFeet(owner);
+                if (now() % 20 == 0) {
+                    fxRing(line f, elem, line z["r"] as num);
+                    for (line id of enemiesNear(line f + vec(0, 1, 0), (line z["r"] as num) + 0.5)) {
+                        spellHit(owner, line sp, line id, line f, 0.3);
+                    }
+                }
+            }
+        }
+    }
+    global zones = line keep;
+}
+
+/** Ward absorbs damage first; returns what gets through. */
+function wardAbsorb(uuid: str, d: num): num {
+    if (!global pWard.hasKeys(uuid) || now() > global pWardUntil[uuid]) {
+        return d;
+    }
+    line w = global pWard[uuid];
+    if (line w >= d) {
+        global pWard[uuid] = line w - d;
+        fxBurst(bodyFeet(uuid) + vec(0, 1.2, 0), "arcane", 0.5);
+        return 0;
+    }
+    global pWard[uuid] = 0;
+    return d - line w;
+}
+
+// ---------------------------------------------------------------- familiars
+
+/** Summons a familiar orb that casts the rest of the phrase for a while. */
+function spawnFamiliar(owner: str, sp: dict) {
+    line phrase = "";
+    for (line wa of (sp["phrase"] as str).split(" ")) {
+        if (line wa != "voco" && line wa != "") {
+            line w = line wa as str;
+            if (line phrase == "") {
+                line phrase = line w;
+            } else {
+                line phrase = "%var(phrase) %var(w)";
+            }
+        }
+    }
+    line inner = spellCompile(owner, line phrase, 0);
+    if (line inner.hasKeys("err") || line phrase == "") {
+        line inner = spellCompile(owner, "sagitta", 0);
+    }
+    line inner["dmg"] = (line inner["dmg"] as num) * 0.6;
+    line f = bodyFeet(owner) + vec(0, 2.4, 0);
+    game.spawnItemDisplay(loc(f.x, f.y, f.z), fxItem("rpg:fx/orb", sp["color"] as num));
+    line id = lastEntity.uuid;
+    lastEntity.setDisplayBrightness(15, 15);
+    lastEntity.setDisplayTeleportDuration(3);
+    rigSetMatrix(line id, basisMatrix(vec(1, 0, 0), vec(0, 1, 0), vec(0, 0, 1), 0.6, 0.6, 0.6, vec(0, 0, 0)), 0);
+    global familiars.append({id: line id, owner: owner, until: now() + num.round(300 * (sp["dur"] as num)), next: now() + 20, sp: line inner});
+    sendBar(owner, "<#E080FF>A familiar answers your call.");
+}
+
+/** Familiars orbit their caster and cast at the nearest enemy. */
+function familiarTick {
+    if (global familiars.len() == 0 || now() % 2 != 0) {
+        return;
+    }
+    line keep: list[dict] = [];
+    for (line fm of global familiars) {
+        line owner = line fm["owner"] as str;
+        line id = line fm["id"] as str;
+        if ((line fm["until"] as num) < now() || !global pBody.hasKeys(owner)) {
+            select entitiesByName(line id);
+            selectedEntity.remove();
+            select reset;
+        } else {
+            line f = bodyFeet(owner);
+            line a = now() * 9;
+            line p = f + vec(num.cos(line a) * 1.3, 2.3 + num.sin(now() * 6) * 0.2, num.sin(line a) * 1.3);
+            select entitiesByName(line id);
+            selectedEntity.teleport(loc(line p.x, line p.y, line p.z));
+            select reset;
+            if (now() >= (line fm["next"] as num)) {
+                line tg = enemiesNear(f, 16);
+                if (line tg.len() > 0) {
+                    spellExec(owner, line fm["sp"] as dict, line p, enemyCenter(line tg[1]));
+                    line fm["next"] = now() + 40;
+                }
+            }
+            line keep.append(line fm);
+        }
+    }
+    global familiars = line keep;
+}
+
+// ---------------------------------------------------------------- learning
+
+/** A scroll item that teaches word w. */
+function makeScroll(w: str): item {
+    line wd = wordData(w);
+    line g = wd[2] as str;
+    line cls = wd[1] as str;
+    return item("paper").setModel("minecraft:paper").setName(s"<!i><#E080FF>Scroll: <white>%var(w)").setLore([s"<gray>%var(cls): <white>%var(g)", s"<dark_gray>Click it in your bag to learn the word."]).setTag("k", "scroll").setTag("word", w);
+}
+
+/** A random word for loot of level lvl. */
+function randomWord(lvl: num): str {
+    line all = allWords();
+    line top = num.clamp(6 + lvl * 2, 6, all.len());
+    return line all[1 + num.floor(num.randomd(0, line top - 0.01))] as str;
+}
+
+/** Teaches player uuid word w; returns 1 if it was new. */
+function learnWord(uuid: str, w: str): num {
+    line known = pdGet(uuid, "words") as list[str];
+    if (line known.find(w) != 0) {
+        return 0;
+    }
+    line known.append(w);
+    pdSet(uuid, "words", line known);
+    line g = wordData(w)[2] as str;
+    select playersByName(uuid);
+    selected.sendMessage(s"<#E080FF>You learned the word <white><b>%var(w)</b></white> <gray>(%var(g))");
+    selected.playSound(snd("Amethyst Block Chime", 1, 1.2));
+    select reset;
+    return 1;
+}
+
+/** Teaches every word (testing). */
+function learnAllWords(uuid: str) {
+    for (line w of allWords()) {
+        learnWord(uuid, line w);
+    }
+}
+
+// ---------------------------------------------------------------- incantations
+
+playerevent chat {
+    // Speaking a phrase of power casts it from your focus at +50% mana.
+    line uuid = default.uuid;
+    if (hasBody(line uuid) == 0) {
+        return;
+    }
+    line msg: str = event.message.setCase(case="lowercase");
+    line words = line msg.split(" ");
+    if (line words.len() == 0 || wordData(line words[1] as str).len() == 0) {
+        return;
+    }
+    event.cancel();
+    if (equipSlotCounts(line uuid)[1] == 0) {
+        sendBar(line uuid, "<red>You need a staff or wand to channel words.");
+        return;
+    }
+    line sp = spellCompile(line uuid, line msg, 1);
+    fxText(bodyFeet(line uuid) + vec(0, 2.6, 0), "<#E080FF><i>%var(msg)", 0);
+    castStart(line uuid, line sp, 1.5);
+}

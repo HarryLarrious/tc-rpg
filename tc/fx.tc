@@ -1,0 +1,194 @@
+// Visual effects: slash trails, floating text (damage numbers), bursts,
+// and the timers that animate and remove them.
+
+/** Live effect displays and the tick each is removed. */
+declare global fxIds: list[str];
+declare global fxEnd: list[num];
+/** Pending changes for next tick: [id, kind, data...]. Kinds: "mat"
+ * (matrix, interpolation), "tp" (teleport target vec, duration). */
+declare global fxPend: list[list];
+
+/** Registers effect entity id to be removed after `life` ticks. */
+function fxKeep(id: str, life: num) {
+    global fxIds.append(id);
+    global fxEnd.append(now() + life);
+}
+
+/** A matrix with basis a (left), b (up), c (forward) scaled by s per axis. */
+function basisMatrix(a: vec, b: vec, c: vec, sx: num, sy: num, sz: num, t: vec): list[num] {
+    return [0 - a.x * sx, b.x * sy, 0 - c.x * sz, t.x, 0 - a.y * sx, b.y * sy, 0 - c.y * sz, t.y, 0 - a.z * sx, b.z * sy, 0 - c.z * sz, t.z, 0, 0, 0, 1];
+}
+
+/** A colored item of model m (fx models read color 0). */
+function fxItem(m: str, color: num): item {
+    return item("paper").setModel(m).setModelDataNumbers([color], type="Colors");
+}
+
+/** A weapon slash at `center`: a bright arc that sweeps across in front of
+ * the character facing `yaw`. plane 0 flat, 1 upright, 2 thrust. */
+function fxSlash(center: vec, yaw: num, plane: num, sweep: num, color: num, reach: num) {
+    line L = vec(num.cos(yaw), 0, num.sin(yaw));
+    line U = vec(0, 1, 0);
+    line F = yawFwd(yaw);
+    line s = reach * 0.75;
+    game.spawnItemDisplay(loc(center.x, center.y, center.z), fxItem("rpg:fx/slash", color));
+    line id = lastEntity.uuid;
+    lastEntity.setDisplayBrightness(15, 15);
+    if (plane == 2) {
+        // Thrust: a streak shooting forward.
+        lastEntity.setItemDisplayItem(fxItem("rpg:fx/bolt", color));
+        rigSetMatrix(line id, basisMatrix(L, U, F, 0.2, 0.2, 0.3, F * 0.4), 0);
+        global fxPend.append([line id, "mat", basisMatrix(L, U, F, 0.25, 0.25, reach * 0.35, F * reach * 0.7), 3]);
+        fxKeep(line id, 7);
+        return;
+    }
+    line a = L;
+    line b = U;
+    line c = F;
+    if (plane == 1) {
+        // Upright: the arc stands in the forward-up plane.
+        line a = U * -1;
+        line b = L;
+    }
+    line r0 = basisRot(line a, line b, line c, 0, 0 - 55 * sweep, 0);
+    line r1 = basisRot(line a, line b, line c, 0, 35 * sweep, 0);
+    rigSetMatrix(line id, basisMatrix(line r0[1], line r0[2], line r0[3], line s * 0.7, line s * 0.7, line s * 0.7, vec(0, 0, 0)), 0);
+    global fxPend.append([line id, "mat", basisMatrix(line r1[1], line r1[2], line r1[3], line s, line s, line s, vec(0, 0, 0)), 3]);
+    fxKeep(line id, 6);
+}
+
+/** Floating text at p that rises and fades (damage numbers). big 1 for a
+ * larger, bolder one. */
+function fxText(p: vec, text: str, big: num) {
+    line q = p + vec(num.randomd(-0.4, 0.4), num.randomd(0, 0.3), num.randomd(-0.4, 0.4));
+    game.spawnTextDisplay(loc(line q.x, line q.y, line q.z), s"%var(text)");
+    line id = lastEntity.uuid;
+    lastEntity.setDisplayBillboard(type="Center");
+    lastEntity.setTextDisplayBackground("#000000", 0);
+    lastEntity.setDisplayTeleportDuration(12);
+    lastEntity.setDisplayBrightness(15, 15);
+    if (big == 1) {
+        lastEntity.setDisplayScale(1.6, 1.6, 1.6);
+    }
+    global fxPend.append([line id, "tp", line q + vec(0, 0.9, 0), 12]);
+    fxKeep(line id, 14);
+}
+
+/** A damage number for amount dmg at p (gold and big for crits). */
+function fxDamage(p: vec, dmg: num, crit: num, elem: str) {
+    line d = num.round(dmg);
+    if (crit == 1) {
+        fxText(p, "<#FFC83C><b>%var(d)!", 1);
+        return;
+    }
+    line col = elemColorTag(elem);
+    fxText(p, "<%var(col)>%var(d)", 0);
+}
+
+/** MiniMessage color of element e. */
+function elemColorTag(e: str): str {
+    line c = {phys: "white", fire: "#FF7A2A", ice: "#9EE8FF", lightning: "#FFF06A", water: "#4AA8FF", earth: "#B08A4A",
+        wind: "#C8FFE0", light: "#FFFBD0", shadow: "#B07AFF", poison: "#8AE04A", life: "#7AFF9A", arcane: "#E080FF"};
+    if (line c.hasKeys(e)) {
+        return line c[e] as str;
+    }
+    return "white";
+}
+
+/** A burst of particles of element e at p. */
+function fxBurst(p: vec, e: str, size: num) {
+    line l = loc(p.x, p.y, p.z);
+    line n = num.round(8 + size * 10);
+    if (e == "fire") {
+        allPlayers.displayParticleEffect(par("Flame", amount=line n, spreadHoriz=size, spreadVert=size * 0.6), line l);
+        allPlayers.displayParticleEffect(par("Large Smoke", amount=4, spreadHoriz=size * 0.5, spreadVert=0.3), line l);
+    } else if (e == "ice") {
+        allPlayers.displayParticleEffect(par("Snowflake", amount=line n, spreadHoriz=size, spreadVert=size * 0.6), line l);
+    } else if (e == "lightning") {
+        allPlayers.displayParticleEffect(par("Electric Spark", amount=line n, spreadHoriz=size, spreadVert=size), line l);
+        allPlayers.displayParticleEffect(par("Flash"), line l);
+    } else if (e == "water") {
+        allPlayers.displayParticleEffect(par("Splash", amount=line n * 2, spreadHoriz=size, spreadVert=0.5), line l);
+    } else if (e == "earth") {
+        allPlayers.displayParticleEffect(par("Dust Plume", amount=line n, spreadHoriz=size, spreadVert=0.4), line l);
+    } else if (e == "wind") {
+        allPlayers.displayParticleEffect(par("Small Gust", amount=line n, spreadHoriz=size, spreadVert=size * 0.5), line l);
+    } else if (e == "light") {
+        allPlayers.displayParticleEffect(par("End Rod", amount=line n, spreadHoriz=size, spreadVert=size), line l);
+    } else if (e == "shadow") {
+        allPlayers.displayParticleEffect(par("Squid Ink", amount=line n, spreadHoriz=size, spreadVert=size * 0.6), line l);
+    } else if (e == "poison") {
+        allPlayers.displayParticleEffect(par("Dust", amount=line n, spreadHoriz=size, spreadVert=size * 0.6, color="#7ACC3A", size=1.5), line l);
+    } else if (e == "life") {
+        allPlayers.displayParticleEffect(par("Happy Villager", amount=line n, spreadHoriz=size, spreadVert=size), line l);
+        allPlayers.displayParticleEffect(par("Heart", amount=3, spreadHoriz=0.5, spreadVert=0.5), line l);
+    } else if (e == "arcane") {
+        allPlayers.displayParticleEffect(par("Enchanted Hit", amount=line n, spreadHoriz=size, spreadVert=size * 0.6), line l);
+    } else {
+        allPlayers.displayParticleEffect(par("Critical Hit", amount=line n, spreadHoriz=size * 0.6, spreadVert=size * 0.4), line l);
+    }
+}
+
+/** A ring of particles of element e on the ground around p. */
+function fxRing(p: vec, e: str, r: num) {
+    line n = num.clamp(num.round(r * 6), 8, 40);
+    repeat (line i to line n) {
+        line a = 360 * line i / line n;
+        line q = p + vec(num.cos(line a) * r, 0.2, num.sin(line a) * r);
+        if (e == "fire") {
+            allPlayers.displayParticleEffect(par("Flame"), loc(line q.x, line q.y, line q.z));
+        } else if (e == "ice") {
+            allPlayers.displayParticleEffect(par("Snowflake"), loc(line q.x, line q.y, line q.z));
+        } else if (e == "lightning") {
+            allPlayers.displayParticleEffect(par("Electric Spark"), loc(line q.x, line q.y, line q.z));
+        } else if (e == "life") {
+            allPlayers.displayParticleEffect(par("Happy Villager"), loc(line q.x, line q.y, line q.z));
+        } else if (e == "shadow") {
+            allPlayers.displayParticleEffect(par("Soul"), loc(line q.x, line q.y, line q.z));
+        } else {
+            allPlayers.displayParticleEffect(par("Enchanted Hit"), loc(line q.x, line q.y, line q.z));
+        }
+    }
+}
+
+/** Advances effects: applies pending changes, removes expired ones. */
+function fxTick {
+    if (global fxPend.len() > 0) {
+        line pend = global fxPend;
+        global fxPend = [];
+        for (line e of line pend) {
+            line id = line e[1] as str;
+            select entitiesByName(line id);
+            if (line e[2] == "mat") {
+                selectedEntity.setDisplayInterpolation(line e[4] as num, 0);
+                selectedEntity.setDisplayTransformationMatrix(line e[3] as list[num]);
+            } else {
+                line v = line e[3] as vec;
+                selectedEntity.teleport(loc(line v.x, line v.y, line v.z));
+            }
+            select reset;
+        }
+    }
+    if (global fxIds.len() == 0) {
+        return;
+    }
+    line t = now();
+    line keepIds: list[str] = [];
+    line keepEnd: list[num] = [];
+    line dead: list[str] = [];
+    repeat (line i to global fxIds.len()) {
+        if (global fxEnd[line i] <= line t) {
+            line dead.append(global fxIds[line i]);
+        } else {
+            line keepIds.append(global fxIds[line i]);
+            line keepEnd.append(global fxEnd[line i]);
+        }
+    }
+    if (line dead.len() > 0) {
+        select entitiesByName(line dead);
+        selectedEntity.remove();
+        select reset;
+        global fxIds = line keepIds;
+        global fxEnd = line keepEnd;
+    }
+}

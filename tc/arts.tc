@@ -1,0 +1,175 @@
+// Weapon arts: stamina skills set into ability slots (daggers, gauntlets
+// and Rare+ weapons have them), taught by the Adventurers' Guild.
+
+/** Per player: art -> tick it is ready again. */
+declare global pArtCd: dict[dict];
+/** Per player: the art being performed. */
+declare global pArt: dict[str];
+/** Per player: next melee hit is a guaranteed backstab until this tick. */
+declare global pBackstab: dict[num];
+
+/** Art data: [name, stamina, cooldown ticks, price, description, icon]. */
+function artData(a: str): list {
+    line d = {
+        lunge: ["Lunge", 25, 80, 120, "Dash forward, striking everything in your path.", "minecraft:iron_sword"],
+        whirlwind: ["Whirlwind", 35, 140, 220, "Spin with your weapon, hitting all around you.", "minecraft:wind_charge"],
+        cleave: ["Cleave", 30, 100, 180, "A huge sweeping blow in front of you.", "minecraft:iron_axe"],
+        shadowstep: ["Shadowstep", 30, 120, 300, "Vanish and reappear behind the nearest foe; your next hit backstabs.", "minecraft:ender_pearl"],
+        slam: ["Earthshaker", 40, 160, 350, "Leap and smash the ground, stunning foes nearby.", "minecraft:mace"],
+        volley: ["Volley", 30, 100, 260, "Loose a fan of five arrows (any weapon throws knives).", "minecraft:arrow"],
+        warcry: ["War Cry", 30, 600, 200, "Roar: +30% damage for 10 seconds and recover some health.", "minecraft:goat_horn"],
+        secondwind: ["Second Wind", 0, 900, 280, "Catch your breath: full stamina and some health.", "minecraft:golden_apple"]
+    };
+    if (line d.hasKeys(a)) {
+        return line d[a] as list;
+    }
+    return ["?", 0, 20, 0, "", "minecraft:barrier"];
+}
+
+/** Every art, in the trainer's order. */
+function allArts(): list[str] {
+    return ["lunge", "warcry", "cleave", "whirlwind", "volley", "secondwind", "shadowstep", "slam"];
+}
+
+/** Arts player uuid knows. */
+function pdArts(uuid: str): list[str] {
+    line r = pdOf(uuid);
+    if (line r.hasKeys("arts")) {
+        return line r["arts"] as list[str];
+    }
+    return [];
+}
+
+/** Uses art a. */
+function artUse(uuid: str, a: str) {
+    if (global pAct[uuid] != "") {
+        return;
+    }
+    if (!global pArtCd.hasKeys(uuid)) {
+        global pArtCd[uuid] = {};
+    }
+    line cd = global pArtCd[uuid];
+    if (line cd.hasKeys(a) && (line cd[a] as num) > now()) {
+        line s = num.ceil(((line cd[a] as num) - now()) / 20);
+        sendBar(uuid, "<gray>Ready in %var(s)s");
+        return;
+    }
+    line ad = artData(a);
+    if (staminaUse(uuid, line ad[2] as num) == 0) {
+        sendBar(uuid, "<red>Too tired!");
+        return;
+    }
+    line cd[a] = now() + (line ad[3] as num);
+    global pArtCd[uuid] = line cd;
+    global pArt[uuid] = a;
+    line len = 14;
+    if (a == "slam") {
+        line len = 20;
+        select entitiesByName(global pBody[uuid]);
+        selectedEntity.setVelocity(vec(0, 0.7, 0) + yawFwd(global pYaw[uuid]) * 0.3);
+        select reset;
+    } else if (a == "whirlwind") {
+        line len = 16;
+    }
+    actStart(uuid, "ability", line len);
+    line n = line ad[1] as str;
+    fxText(bodyFeet(uuid) + vec(0, 2.6, 0), "<#FFC83C><b>%var(n)", 0);
+}
+
+/** The art's moment of effect. */
+function abilityRelease(uuid: str) {
+    line a = global pArt[uuid];
+    line feet = bodyFeet(uuid);
+    line yaw = global pYaw[uuid];
+    line fwd = yawFwd(yaw);
+    line dmg = meleeDamage(uuid);
+    line c = feet + vec(0, 1.1, 0);
+    if (a == "lunge") {
+        line end = feet + fwd * 7;
+        select entitiesByName(global pBody[uuid]);
+        selectedEntity.setVelocity(fwd * 1.6 + vec(0, 0.1, 0));
+        select reset;
+        global pIframe[uuid] = now() + 6;
+        for (line id of enemiesNear(c + fwd * 3.5, 6)) {
+            if (segDist3(enemyCenter(line id), c, line end + vec(0, 1.1, 0)) < 1.6) {
+                hitEnemy(line id, dmg * 1.5, 0, feet, 0.6, uuid, "phys");
+            }
+        }
+        fxSlash(c + fwd * 2, yaw, 2, 1, 0xFFFFFF, 5);
+    } else if (a == "whirlwind" || a == "cleave") {
+        line reach = 3.2;
+        if (mainType(uuid) != "fist") {
+            line reach = wtData(mainType(uuid))[4] as num;
+        }
+        line arc = 180;
+        line mul = 1.6;
+        if (a == "cleave") {
+            line arc = 85;
+            line mul = 2.2;
+        }
+        for (line id of enemiesNear(c, line reach + 2)) {
+            line ep = enemyCenter(line id);
+            line tv = vec(line ep.x - feet.x, 0, line ep.z - feet.z);
+            if (line tv.len() < line reach + enemyRadius(line id) && (line tv.len() < 0.3 || num.acos(num.clamp(line tv.setLength(1).dot(fwd), -1, 1)) <= line arc)) {
+                hitEnemy(line id, dmg * line mul, 0, feet, 0.7, uuid, "phys");
+            }
+        }
+        fxSlash(c, yaw, 0, 1, 0xFFFFFF, line reach * 1.2);
+        if (a == "whirlwind") {
+            fxSlash(c, yaw + 180, 0, 1, 0xFFFFFF, line reach * 1.2);
+            fxExpandRing(feet + vec(0, 0.8, 0), line reach, 0xFFFFFF);
+        }
+        global pShake[uuid] = 0.4;
+    } else if (a == "shadowstep") {
+        line best = "";
+        line bd = 12;
+        for (line id of enemiesNear(c, 12)) {
+            line d = (enemyCenter(line id) - c).len();
+            if (line d < line bd) {
+                line bd = line d;
+                line best = line id;
+            }
+        }
+        if (line best == "") {
+            sendBar(uuid, "<gray>No foe in reach.");
+            return;
+        }
+        line ep = global ePos[line best];
+        line back = vec(line ep.x - feet.x, 0, line ep.z - feet.z).setLength(1);
+        line dest = line ep + line back * 1.6;
+        fxBurst(c, "shadow", 0.8);
+        select entitiesByName(global pBody[uuid]);
+        selectedEntity.teleport(loc(line dest.x, line dest.y, line dest.z));
+        select reset;
+        global pYaw[uuid] = yawOf(line back * -1);
+        global pBackstab[uuid] = now() + 60;
+        fxBurst(line dest + vec(0, 1, 0), "shadow", 0.8);
+    } else if (a == "slam") {
+        for (line id of enemiesNear(feet, 5)) {
+            hitEnemy(line id, dmg * 1.8, 0, feet, 0.9, uuid, "earth");
+            enemyStatus(line id, "stun", 30, 0);
+        }
+        fxBurst(feet + vec(0, 0.3, 0), "earth", 2);
+        fxExpandRing(feet + vec(0, 0.2, 0), 5, 0xA07A4A);
+        global pShake[uuid] = 0.7;
+        allPlayers.playSound(snd("Explode", 0.6, 0.8), loc(feet.x, feet.y, feet.z));
+    } else if (a == "volley") {
+        line aim = playerAim(uuid);
+        line from0: vec = c + fwd * 0.5;
+        line dir = (aim - line from0).setLength(1);
+        repeat (line i to 5) {
+            line d = dir.rotateAroundVec(vec(0, 1, 0), (line i - 3) * 7);
+            projSpawn(uuid, line from0, line d * 1.9, "arrow", {dmg: dmg * 0.8 * raceMul(playerRace(uuid), "ranged"), grav: 0.02, radius: 0.4, model: "rpg:fx/arrow", color: 0xFFFFFF, life: 50, elem: "phys"});
+        }
+    } else if (a == "warcry") {
+        global pBuff[uuid] = 1.3;
+        global pBuffUntil[uuid] = now() + 200;
+        global pHp[uuid] = num.min(stat(uuid, "maxHp"), global pHp[uuid] + stat(uuid, "maxHp") * 0.1);
+        fxExpandRing(feet + vec(0, 1, 0), 6, 0xFF5030);
+        allPlayers.playSound(snd("Ravager Roar", 0.8, 1.2), loc(feet.x, feet.y, feet.z));
+    } else if (a == "secondwind") {
+        global pSta[uuid] = stat(uuid, "maxSta");
+        global pHp[uuid] = num.min(stat(uuid, "maxHp"), global pHp[uuid] + stat(uuid, "maxHp") * 0.15);
+        fxBurst(feet + vec(0, 1, 0), "life", 1);
+    }
+}

@@ -323,7 +323,46 @@ def shield(v: int) -> Model:
 # ---------------------------------------------------------------- effects
 
 
+def crescent_texture(name: str, full: bool) -> str:
+    """A bright crescent (or full ring) fading toward its inner edge and its
+    tail, on a clear 128 px texture."""
+    n = 128
+    img = Image.new("RGBA", (n, n), (0, 0, 0, 0))
+    px = img.load()
+    c = n / 2
+    for y in range(n):
+        for x in range(n):
+            dx, dy = x + 0.5 - c, y + 0.5 - c
+            r = math.hypot(dx, dy) / c
+            if not 0.62 < r < 0.98:
+                continue
+            ang = math.degrees(math.atan2(dx, -dy))  # 0 at the top, +90 right
+            if full:
+                tail = 1.0
+            else:
+                if not -95 < ang < 95:
+                    continue
+                tail = (ang + 95) / 190  # fades toward the start of the swing
+            edge = 1 - abs(r - 0.9) / 0.28
+            a = max(0.0, min(1.0, edge)) ** 1.5 * tail ** 1.3
+            px[x, y] = (255, 255, 255, int(255 * a))
+    path = ASSETS / "textures/item" / f"{name}.png"
+    img.save(path)
+    return f"{NS}:item/{name}"
+
+
 def fx_slash(full: bool) -> Model:
+    """One flat quad in the XZ plane (32 px across) carrying a crescent:
+    the arc runs across the front (+Z) from -X to +X."""
+    m = Model(1.0)
+    tex = crescent_texture("fx_ring" if full else "fx_crescent", full)
+    m.box((-16, -0.05, -16), (16, 0.05, 16), tex, 0, light=15, faces=("up", "down"))
+    m.elements[-1]["faces"]["up"]["uv"] = [0, 16, 16, 0]
+    m.elements[-1]["faces"]["down"]["uv"] = [0, 0, 16, 16]
+    return m
+
+
+def fx_slash_old(full: bool) -> Model:
     """A flat ring of plates in the XZ plane (radius 14 px), facing +Z for
     the half arc; texture bright at the outer edge."""
     m = Model(1.0)

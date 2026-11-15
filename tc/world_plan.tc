@@ -1,0 +1,504 @@
+// World plan: the city's streets, wall, lots and the points of interest,
+// worked out from the seed (PLAN.md, "World"). Mirrors tools/worldgen.py,
+// which draws map/preview.png from the same steps; keep them in step.
+//
+// Everything is in plot coordinates and sized from game.plotSize, so the
+// plot can move or grow and the plan still fits.
+
+/** World seed. */
+function worldSeed(): num {
+    return 7341;
+}
+
+/** Plan: plot size, city center, wall radius, street rotation (degrees). */
+declare global wS: num;
+declare global wCx: num;
+declare global wCz: num;
+declare global wR: num;
+declare global wRot: num;
+/** Streets: [x1, z1, x2, z2, width, kind]; kinds plaza, main, country,
+ * ring, wallst, lane. */
+declare global wRoads: list[list];
+/** Street index grid: "gx,gz" (16-block cells) -> street indices. */
+declare global wGrid: dict[list];
+/** Wall polygon corners, and the gates [x, z, angle]. */
+declare global wWall: list[vec];
+declare global wGates: list[list];
+/** Buildings: {type, x0, z0, x1, z1, facing, floors}. */
+declare global wBlds: list[dict];
+/** Building index grid: "gx,gz" -> building indices. */
+declare global wBGrid: dict[list];
+/** Points of interest: name -> [x, z, radius]. */
+declare global wPois: dict[list];
+/** 1 once the plan is complete. */
+declare global wPlanned: num;
+/** Work counter for wBreathe. */
+declare global wOps: num;
+
+/** Integer hash 0..1000002 (same steps as tools/worldgen.py hsh). */
+function wHash(x: num, z: num, s: num): num {
+    line h = (x * 374761 + z * 668265 + s * 1013 + 7) % 1000003;
+    line h = (line h * line h + 12345) % 1000003;
+    line h = (line h * line h + 6789) % 1000003;
+    return line h;
+}
+
+/** Hash as 0..0.999. */
+function wRand(x: num, z: num, s: num): num {
+    return (wHash(x, z, s) % 1000) / 1000;
+}
+
+/** Smoothstep of t in 0..1. */
+function wSmooth(t: num): num {
+    return t * t * (3 - 2 * t);
+}
+
+/** Value noise 0..1 on a lattice of `cell` blocks. */
+function wNoise(x: num, z: num, cell: num, salt: num): num {
+    line s = worldSeed() + salt;
+    line ix = num.floor(x / cell);
+    line iz = num.floor(z / cell);
+    line fx = wSmooth(x / cell - line ix);
+    line fz = wSmooth(z / cell - line iz);
+    line a = wRand(line ix, line iz, line s);
+    line b = wRand(line ix + 1, line iz, line s);
+    line c = wRand(line ix, line iz + 1, line s);
+    line d = wRand(line ix + 1, line iz + 1, line s);
+    line top = line a + (line b - line a) * line fx;
+    line bot = line c + (line d - line c) * line fx;
+    return line top + (line bot - line top) * line fz;
+}
+
+/** Waits a tick every n units of work, longer while the plot is busy. */
+function wBreathe(n: num) {
+    global wOps += 1;
+    if (global wOps >= n) {
+        global wOps = 0;
+        wait;
+        while (game.cpuUsage > 70) {
+            wait(5);
+        }
+    }
+}
+
+/** Wall radius in direction `ang` (degrees). */
+function wallR(ang: num): num {
+    return global wR + 7 * (wNoise((ang * 0.017453 + 10) * 3, 0, 40, 51) - 0.5) * 2;
+}
+
+/** Adds a street from (x1, z1) to (x2, z2) as n segments, bent sideways. */
+function wCurve(x1: num, z1: num, x2: num, z2: num, n: num, amp: num, salt: num, width: num, kind: str) {
+    line dx = x2 - x1;
+    line dz = z2 - z1;
+    line L = num.root(line dx * line dx + line dz * line dz);
+    line nx = 0 - line dz / line L;
+    line nz = line dx / line L;
+    line ph = (wHash(salt, 9, worldSeed()) % 628) / 100;
+    line px = x1;
+    line pz = z1;
+    repeat (line i to n) {
+        line t = line i / n;
+        line off = amp * num.sinr(line t * 3.14159) * num.sinr(line t * 2.3 + line ph);
+        line qx = x1 + line dx * line t + line nx * line off;
+        line qz = z1 + line dz * line t + line nz * line off;
+        wAddRoad(line px, line pz, line qx, line qz, width, kind);
+        line px = line qx;
+        line pz = line qz;
+    }
+}
+
+/** Appends a street segment and files it in the grid. */
+function wAddRoad(x1: num, z1: num, x2: num, z2: num, w: num, kind: str) {
+    global wRoads.append([x1, z1, x2, z2, w, kind]);
+    line idx = global wRoads.len();
+    line m = w / 2 + 2;
+    line gx0 = num.floor((num.min(x1, x2) - line m) / 16);
+    line gx1 = num.floor((num.max(x1, x2) + line m) / 16);
+    line gz0 = num.floor((num.min(z1, z2) - line m) / 16);
+    line gz1 = num.floor((num.max(z1, z2) + line m) / 16);
+    for (line gx of range(line gx0, line gx1)) {
+        for (line gz of range(line gz0, line gz1)) {
+            line key = "%var(gx),%var(gz)";
+            if (!global wGrid.hasKeys(line key)) {
+                global wGrid[line key] = [];
+            }
+            line l = global wGrid[line key];
+            line l.append(line idx);
+            global wGrid[line key] = line l;
+        }
+    }
+}
+
+/** Plans the points of interest. */
+function planPois {
+    line s = worldSeed();
+    line ang = global wRot + 45 + wHash(7, 7, line s) % 30;
+    line d = global wR + 140;
+    global wPois["lake"] = [global wCx + num.cos(line ang) * line d, global wCz + num.sin(line ang) * line d, 34];
+    line names = ["camp", "ruins", "cave", "grove"];
+    repeat (line i to 4) {
+        line a = global wRot + 135 + (line i - 1) * 90 + wHash(line i - 1, 88, line s) % 30;
+        line dd = global wR + 180 + wHash(line i - 1, 99, line s) % 80;
+        line x = num.clamp(global wCx + num.cos(line a) * line dd, 70, global wS - 70);
+        line z = num.clamp(global wCz + num.sin(line a) * line dd, 70, global wS - 70);
+        global wPois[line names[line i] as str] = [line x, line z, 18];
+    }
+}
+
+/** Plans the wall polygon. */
+function planWall {
+    repeat (line i to 18) {
+        line a = 360 * (line i - 1) / 18;
+        line r = wallR(line a);
+        global wWall.append(vec(global wCx + num.cos(line a) * line r, 0, global wCz + num.sin(line a) * line r));
+    }
+}
+
+/** Plans every street. */
+function planRoads {
+    line cx = global wCx;
+    line cz = global wCz;
+    line R = global wR;
+    line P = 15;
+    wAddRoad(cx - line P, cz - line P, cx + line P, cz - line P, 3, "plaza");
+    wAddRoad(cx + line P, cz - line P, cx + line P, cz + line P, 3, "plaza");
+    wAddRoad(cx + line P, cz + line P, cx - line P, cz + line P, 3, "plaza");
+    wAddRoad(cx - line P, cz + line P, cx - line P, cz - line P, 3, "plaza");
+    repeat (line i to 4) {
+        line k = line i - 1;
+        line ang = global wRot + line k * 90 + (wHash(line k, 77, worldSeed()) % 25) - 12;
+        line ux = num.cos(line ang);
+        line uz = num.sin(line ang);
+        line gr = wallR(line ang);
+        line gx = cx + line ux * line gr;
+        line gz = cz + line uz * line gr;
+        wCurve(cx + line ux * line P * 1.4, cz + line uz * line P * 1.4, line gx, line gz, 6, 7, 100 + line k, 5, "main");
+        global wGates.append([line gx, line gz, line ang]);
+        line reach = num.min(num.min(cx, cz), num.min(global wS - cx, global wS - cz)) - 60;
+        line ex = num.clamp(cx + line ux * (line gr + line reach * 0.85), 40, global wS - 40);
+        line ez = num.clamp(cz + line uz * (line gr + line reach * 0.85), 40, global wS - 40);
+        wCurve(line gx + line ux * 2, line gz + line uz * 2, line ex, line ez, 10, 26, 200 + line k, 4, "country");
+    }
+    // Ring street.
+    line ring: list[vec] = [];
+    repeat (line i to 28) {
+        line a = 360 * (line i - 1) / 28;
+        line r = R * 0.6 + 6 * (wNoise((line i - 1) * 7, 3, 9, 61) - 0.5);
+        line ring.append(vec(cx + num.cos(line a) * line r, 0, cz + num.sin(line a) * line r));
+    }
+    repeat (line i to 28) {
+        line a = line ring[line i];
+        line b = line ring[line i % 28 + 1];
+        wAddRoad(line a.x, line a.z, line b.x, line b.z, 4, "ring");
+    }
+    // Wall street.
+    line inner: list[vec] = [];
+    repeat (line i to 36) {
+        line a = 360 * (line i - 1) / 36;
+        line r = wallR(line a) - 9;
+        line inner.append(vec(cx + num.cos(line a) * line r, 0, cz + num.sin(line a) * line r));
+    }
+    repeat (line i to 36) {
+        line a = line inner[line i];
+        line b = line inner[line i % 36 + 1];
+        wAddRoad(line a.x, line a.z, line b.x, line b.z, 3, "wallst");
+    }
+    // Lanes.
+    repeat (line i to 4) {
+        line k = line i - 1;
+        repeat (line jj to 2) {
+            line j = line jj - 1;
+            line frac = 0.33;
+            if (line j == 1) {
+                line frac = 0.67;
+            }
+            line ang = global wRot + line k * 90 + 90 * line frac + (wHash(line k, line j, worldSeed() + 5) % 15) - 7;
+            line ux = num.cos(line ang);
+            line uz = num.sin(line ang);
+            if (line j == 0) {
+                wCurve(cx + line ux * 27, cz + line uz * 27, cx + line ux * R * 0.6, cz + line uz * R * 0.6, 3, 3, 300 + line k * 2 + line j, 3, "lane");
+            }
+            line ang2 = line ang + (wHash(line k, line j, worldSeed() + 9) % 20) - 10;
+            line ux2 = num.cos(line ang2);
+            line uz2 = num.sin(line ang2);
+            line wr2 = wallR(line ang2) - 9;
+            wCurve(cx + line ux2 * R * 0.6, cz + line uz2 * R * 0.6, cx + line ux2 * line wr2, cz + line uz2 * line wr2, 3, 3, 400 + line k * 2 + line j, 3, "lane");
+            if (line j == 1) {
+                line ang3 = line ang + 22;
+                line ux3 = num.cos(line ang3);
+                line uz3 = num.sin(line ang3);
+                wCurve(cx + line ux3 * 30, cz + line uz3 * 30, cx + line ux3 * R * 0.6, cz + line uz3 * R * 0.6, 3, 4, 500 + line k, 3, "lane");
+            }
+        }
+    }
+}
+
+/** Distance from (px, pz) to the segment (x1, z1)-(x2, z2). */
+function segDist(px: num, pz: num, x1: num, z1: num, x2: num, z2: num): num {
+    line dx = x2 - x1;
+    line dz = z2 - z1;
+    line L2 = line dx * line dx + line dz * line dz;
+    line t = 0;
+    if (line L2 > 0) {
+        line t = num.clamp(((px - x1) * line dx + (pz - z1) * line dz) / line L2, 0, 1);
+    }
+    line ex = px - (x1 + line dx * line t);
+    line ez = pz - (z1 + line dz * line t);
+    return num.root(line ex * line ex + line ez * line ez);
+}
+
+/** 1 when a building may stand on x0..x1, z0..z1: clear of streets,
+ * the plaza, other buildings, and (inside = 1) within the wall. */
+function rectOk(x0: num, z0: num, x1: num, z1: num, inside: num): num {
+    line cx = global wCx;
+    line cz = global wCz;
+    line mx = (x0 + x1) / 2;
+    line mz = (z0 + z1) / 2;
+    if (inside == 1) {
+        for (line p of [vec(x0, 0, z0), vec(x1, 0, z0), vec(x0, 0, z1), vec(x1, 0, z1)]) {
+            line ang = num.atan2(line p.z - cz, line p.x - cx);
+            line dx = line p.x - cx;
+            line dz = line p.z - cz;
+            if (num.root(line dx * line dx + line dz * line dz) > wallR(line ang) - 5) {
+                return 0;
+            }
+        }
+    }
+    if (num.abs(line mx - cx) < 17 + (x1 - x0) / 2 && num.abs(line mz - cz) < 17 + (z1 - z0) / 2) {
+        return 0;
+    }
+    line pts: list[vec] = [vec(x0, 0, z0), vec(x1, 0, z0), vec(x0, 0, z1), vec(x1, 0, z1), vec(line mx, 0, line mz), vec(line mx, 0, z0), vec(line mx, 0, z1), vec(x0, 0, line mz), vec(x1, 0, line mz)];
+    // Streets and buildings filed in the grid cells around the rectangle.
+    line seen = {};
+    for (line gx of range(num.floor((x0 - 4) / 16), num.floor((x1 + 4) / 16))) {
+        for (line gz of range(num.floor((z0 - 4) / 16), num.floor((z1 + 4) / 16))) {
+            line key = "%var(gx),%var(gz)";
+            if (global wGrid.hasKeys(line key)) {
+                for (line ri of global wGrid[line key] as list[num]) {
+                    if (!line seen.hasKeys("%var(ri)")) {
+                        line seen["%var(ri)"] = 1;
+                        line r = global wRoads[line ri];
+                        line lim = (line r[5] as num) / 2 + 0.6;
+                        line ax = line r[1] as num;
+                        line az = line r[2] as num;
+                        line bx = line r[3] as num;
+                        line bz = line r[4] as num;
+                        for (line p of line pts) {
+                            if (segDist(line p.x, line p.z, line ax, line az, line bx, line bz) < line lim) {
+                                return 0;
+                            }
+                        }
+                        line rmx = (line ax + line bx) / 2;
+                        line rmz = (line az + line bz) / 2;
+                        if (line rmx >= x0 - 1 && line rmx <= x1 + 1 && line rmz >= z0 - 1 && line rmz <= z1 + 1) {
+                            return 0;
+                        }
+                    }
+                }
+            }
+            if (global wBGrid.hasKeys(line key)) {
+                for (line bi of global wBGrid[line key] as list[num]) {
+                    line o = global wBlds[line bi];
+                    if (x0 < (line o["x1"] as num) + 1 && x1 > (line o["x0"] as num) - 1 && z0 < (line o["z1"] as num) + 1 && z1 > (line o["z0"] as num) - 1) {
+                        return 0;
+                    }
+                }
+            }
+        }
+    }
+    return 1;
+}
+
+/** Adds building b to the list and the grid; returns its index. */
+function wAddBld(b: dict): num {
+    global wBlds.append(b);
+    line idx = global wBlds.len();
+    for (line gx of range(num.floor(((b["x0"] as num) - 4) / 16), num.floor(((b["x1"] as num) + 4) / 16))) {
+        for (line gz of range(num.floor(((b["z0"] as num) - 4) / 16), num.floor(((b["z1"] as num) + 4) / 16))) {
+            line key = "%var(gx),%var(gz)";
+            if (!global wBGrid.hasKeys(line key)) {
+                global wBGrid[line key] = [];
+            }
+            line l = global wBGrid[line key];
+            line l.append(line idx);
+            global wBGrid[line key] = line l;
+        }
+    }
+    return line idx;
+}
+
+/** Tries a w (frontage) x d lot beside street ri at t on side (+1/-1);
+ * returns the new building's index or 0. */
+function tryLot(ri: num, t: num, side: num, w: num, d: num, btype: str, h: num, inside: num): num {
+    line r = global wRoads[ri];
+    line a = line r[1] as num;
+    line b = line r[2] as num;
+    line c = line r[3] as num;
+    line dd = line r[4] as num;
+    line rw = line r[5] as num;
+    line px = line a + (line c - line a) * t;
+    line pz = line b + (line dd - line b) * t;
+    line L = num.root((line c - line a) ** 2 + (line dd - line b) ** 2);
+    line nx = 0 - (line dd - line b) / line L * side;
+    line nz = (line c - line a) / line L * side;
+    line bw = w;
+    line bd = d;
+    if (num.abs(line c - line a) < num.abs(line dd - line b)) {
+        line bw = d;
+        line bd = w;
+    }
+    line ext = num.abs(line nx) * line bw / 2 + num.abs(line nz) * line bd / 2;
+    line gap = line rw / 2 + 1 + line ext;
+    line mx = line px + line nx * line gap;
+    line mz = line pz + line nz * line gap;
+    line x0 = num.floor(line mx - line bw / 2 + 0.5);
+    line z0 = num.floor(line mz - line bd / 2 + 0.5);
+    line x1 = line x0 + line bw - 1;
+    line z1 = line z0 + line bd - 1;
+    if (rectOk(line x0, line z0, line x1, line z1, inside) == 0) {
+        return 0;
+    }
+    line facing = "north";
+    if (num.abs(line nx) > num.abs(line nz)) {
+        if (line nx > 0) { line facing = "west"; } else { line facing = "east"; }
+    } else if (line nz <= 0) {
+        line facing = "south";
+    }
+    return wAddBld({type: btype, x0: line x0, z0: line z0, x1: line x1, z1: line z1, facing: line facing, floors: 1 + num.floor(h / 37) % 3});
+}
+
+/** Finds a lot for a w x d building on a street of one of `kinds`. */
+function placeAlong(kinds: list[str], btype: str, w: num, d: num, salt: num, tFrom: num, tTo: num, tries: num, inside: num): num {
+    line segs: list[num] = [];
+    repeat (line i to global wRoads.len()) {
+        if (kinds.find(global wRoads[line i][6]) != 0) {
+            line segs.append(line i);
+        }
+    }
+    if (line segs.len() == 0) {
+        return 0;
+    }
+    repeat (line k to tries) {
+        line h = wHash(salt, line k - 1, worldSeed());
+        line ri = line segs[1 + line h % line segs.len()];
+        line t = tFrom + (tTo - tFrom) * (num.floor(line h / 7) % 100) / 100;
+        line side = -1;
+        if (num.floor(line h / 701) % 2 == 1) {
+            line side = 1;
+        }
+        line b = tryLot(line ri, line t, line side, w, d, btype, line h, inside);
+        wBreathe(6);
+        if (line b != 0) {
+            return line b;
+        }
+    }
+    return 0;
+}
+
+/** Plans every lot: the special buildings, rows of houses, farms. */
+function planLots {
+    line specs = [
+        ["keep", 21, 17, ["ring", "main"]], ["guild", 15, 11, ["plaza"]], ["inn", 13, 11, ["plaza"]],
+        ["library", 13, 11, ["plaza", "main"]], ["armory", 11, 9, ["plaza", "main"]],
+        ["blacksmith", 11, 9, ["main"]], ["chapel", 15, 9, ["main", "ring"]], ["tavern", 11, 9, ["main"]],
+        ["alchemist", 9, 7, ["main", "ring"]], ["store", 9, 9, ["plaza", "main"]], ["bakery", 9, 7, ["ring"]],
+        ["magetower", 9, 9, ["ring"]], ["barracks", 15, 9, ["main"]], ["stables", 13, 9, ["main"]]
+    ];
+    line floorsOf = {keep: 3, chapel: 1, magetower: 5, guild: 2, inn: 3};
+    repeat (line i to line specs.len()) {
+        line sp = line specs[line i] as list;
+        line bt = line sp[1] as str;
+        line tFrom = 0;
+        if (line bt == "barracks" || line bt == "stables") {
+            line tFrom = 0.6;
+        }
+        line b = placeAlong(line sp[4] as list[str], line bt, line sp[2] as num, line sp[3] as num, 1000 + line i - 1, line tFrom, 1, 200, 1);
+        if (line b == 0) {
+            line b = placeAlong(["main", "ring", "lane"], line bt, line sp[2] as num, line sp[3] as num, 2000 + line i - 1, 0, 1, 300, 1);
+        }
+        if (line b != 0 && line floorsOf.hasKeys(line bt)) {
+            line o = global wBlds[line b];
+            line o["floors"] = line floorsOf[line bt];
+            global wBlds[line b] = line o;
+        }
+    }
+    // Houses: march along both sides of every street, packing lots.
+    line nRoads = global wRoads.len();
+    repeat (line si to line nRoads) {
+        line seg = global wRoads[line si];
+        line kind = line seg[6] as str;
+        if (line kind != "country") {
+            line L = num.root(((line seg[3] as num) - (line seg[1] as num)) ** 2 + ((line seg[4] as num) - (line seg[2] as num)) ** 2);
+            for (line side of [1, -1]) {
+                line pos = 1;
+                line sideBit = 0;
+                if (line side > 0) {
+                    line sideBit = 1;
+                }
+                while (line pos < line L - 3) {
+                    line h = wHash((line si - 1) * 2 + line sideBit, num.floor(line pos), worldSeed() + 3);
+                    line w = 7 + (line h % 3) * 2;
+                    line d = 7 + (num.floor(line h / 3) % 3) * 2;
+                    line t = (line pos + line w / 2) / line L;
+                    if (line t > 1) {
+                        line pos = line L;
+                    } else if (tryLot(line si, line t, line side, line w, line d, "house", line h, 1) != 0) {
+                        line pos += line w + 1;
+                    } else {
+                        line pos += 2;
+                    }
+                    wBreathe(8);
+                }
+            }
+        }
+    }
+    // Farms outside, along the country roads near the gates.
+    line nf = 0;
+    repeat (line k to 60) {
+        if (line nf < 16) {
+            line h = wHash(line k - 1, 66, worldSeed());
+            line w = 13 + line h % 9;
+            line d = 17 + num.floor(line h / 9) % 9;
+            line b = placeAlong(["country"], "farm", line w, line d, 7000 + line k - 1, 0.02, 0.4, 2, 0);
+            if (line b != 0) {
+                line o = global wBlds[line b];
+                line fx = ((line o["x0"] as num) + (line o["x1"] as num)) / 2;
+                line fz = ((line o["z0"] as num) + (line o["z1"] as num)) / 2;
+                line dc = num.root((line fx - global wCx) ** 2 + (line fz - global wCz) ** 2);
+                if (line dc < global wR + 10 || num.abs(line fx - riverX(line fz)) < 16) {
+                    // Dropped: too close to town or the river.
+                    line o["type"] = "none";
+                    global wBlds[line b] = line o;
+                } else {
+                    line nf += 1;
+                }
+            }
+        }
+    }
+}
+
+/** Works out the whole plan (takes a few seconds; waits between steps). */
+function worldPlan {
+    global wPlanned = 0;
+    global wS = game.plotSize;
+    line s = worldSeed();
+    global wCx = num.floor(global wS / 2) + wHash(1, 2, line s) % 41 - 20;
+    global wCz = num.floor(global wS / 2) + wHash(3, 4, line s) % 41 - 20;
+    global wR = 118;
+    if (global wS < 1001) {
+        global wR = num.round(118 * num.min(1, global wS / 1001 * 1.5));
+    }
+    global wRot = wHash(5, 6, line s) % 90;
+    global wRoads = [];
+    global wGrid = {};
+    global wWall = [];
+    global wGates = [];
+    global wBlds = [];
+    global wBGrid = {};
+    global wPois = {};
+    planPois();
+    planWall();
+    planRoads();
+    planLots();
+    global wPlanned = 1;
+}

@@ -1,0 +1,273 @@
+// Projectiles: arrows, spell bolts and enemy missiles. Each is an item
+// display moved every tick; blocks stop it, enemies (or, for enemy
+// missiles, players) are hit along its path.
+//
+// A projectile is a dict: {id, owner, pos, vel, dmg, grav, radius, life,
+// elem, model, color, pierce, bounce, homing, burst, status..., spell}.
+// owner is a player UUID or "enemy".
+
+declare global projs: list[dict];
+
+/** Orientation matrix pointing the model's +Z along v, scale s. */
+function alongMatrix(v: vec, s: num): list[num] {
+    line c = v.setLength(1);
+    line up = vec(0, 1, 0);
+    if (num.abs(line c.y) > 0.98) {
+        line up = vec(1, 0, 0);
+    }
+    line a = line up.cross(line c).setLength(1);
+    line b = line c.cross(line a);
+    return basisMatrix(line a, line b, line c, s, s, s, vec(0, 0, 0));
+}
+
+/** Launches a projectile from `start` with velocity vel. kind is a label,
+ * opts the fields above (dmg, grav, radius, model, color, life, elem...). */
+function projSpawn(owner: str, p0: vec, vel: vec, kind: str, opts: dict) {
+    line scale = 1;
+    if (opts.hasKeys("scale")) {
+        line scale = opts["scale"] as num;
+    }
+    game.spawnItemDisplay(loc(p0.x, p0.y, p0.z), fxItem(opts["model"] as str, opts["color"] as num));
+    line id = lastEntity.uuid;
+    lastEntity.setDisplayTeleportDuration(1);
+    lastEntity.setDisplayBrightness(15, 15);
+    rigSetMatrix(line id, alongMatrix(vel, line scale), 0);
+    line p = opts;
+    line p["id"] = line id;
+    line p["owner"] = owner;
+    line p["pos"] = p0;
+    line p["vel"] = vel;
+    line p["kind"] = kind;
+    line p["age"] = 0;
+    line p["hit"] = [];
+    global projs.append(line p);
+}
+
+/** Field k of projectile p as a number (0 when missing). */
+function pNum(p: dict, k: str): num {
+    if (p.hasKeys(k)) {
+        return p[k] as num;
+    }
+    return 0;
+}
+
+/** Moves every projectile one tick. */
+function projTick {
+    if (global projs.len() == 0) {
+        return;
+    }
+    line keep: list[dict] = [];
+    for (line p of global projs) {
+        line alive = projStep(line p);
+        if (line alive == 1) {
+            line keep.append(global projCur);
+        }
+    }
+    global projs = line keep;
+}
+
+/** The projectile being stepped (projStep updates it here). */
+declare global projCur: dict;
+
+/** Steps projectile p; returns 1 while it lives (the updated dict is left
+ * in projCur). */
+function projStep(p: dict): num {
+    line q = p;
+    line pos = q["pos"] as vec;
+    line vel = q["vel"] as vec;
+    line age = pNum(q, "age") + 1;
+    line q["age"] = line age;
+    if (line age > pNum(q, "life")) {
+        projImpact(line q, line pos, "");
+        projRemove(line q);
+        return 0;
+    }
+    // Homing: turn toward the nearest enemy (or the target player).
+    if (pNum(q, "homing") > 0 && line age % 2 == 0) {
+        line tgt = projHomingTarget(line q, line pos);
+        if (line tgt.len() > 0.01) {
+            line want = (line tgt - line pos).setLength(line vel.len());
+            line vel = (line vel + (line want - line vel) * (pNum(q, "homing") * 0.25)).setLength(line vel.len());
+        }
+    }
+    line vel = line vel + vec(0, 0 - pNum(q, "grav"), 0);
+    line step = line vel.len();
+    // Blocks.
+    line stop = game.raycast(loc(line pos.x, line pos.y, line pos.z).setDirection(line vel), line step + 0.05, blockCollision="Solid blocks");
+    line sv = vec(line stop.x, line stop.y, line stop.z);
+    line blocked = 0;
+    if ((line sv - line pos).len() < line step - 0.01) {
+        line blocked = 1;
+    }
+    line end = line pos + line vel;
+    if (line blocked == 1) {
+        line end = line sv;
+    }
+    // Targets along the path.
+    line r = pNum(q, "radius");
+    line owner = q["owner"] as str;
+    if (line owner == "enemy") {
+        for (line uuid, line b of global pBody) {
+            line c = bodyFeet(line uuid) + vec(0, 1, 0);
+            if (segDist3(line c, line pos, line end) < line r + 0.6) {
+                playerHurt(line uuid, pNum(q, "dmg"), line pos, q["elem"] as str);
+                projImpact(line q, line c, "");
+                projRemove(line q);
+                return 0;
+            }
+        }
+    } else {
+        line hitList = q["hit"] as list[str];
+        for (line id of enemiesNear((line pos + line end) * 0.5, line step / 2 + line r + 2)) {
+            if (line hitList.find(line id) == 0) {
+                line c = enemyCenter(line id);
+                if (segDist3(line c, line pos, line end) < line r + enemyRadius(line id)) {
+                    line hitList.append(line id);
+                    line q["hit"] = line hitList;
+                    projImpact(line q, line c, line id);
+                    if (pNum(q, "pierce") > 0) {
+                        line q["pierce"] = pNum(q, "pierce") - 1;
+                    } else if (pNum(q, "bounce") > 0) {
+                        line q["bounce"] = pNum(q, "bounce") - 1;
+                        line nxt = projBounceTarget(line c, line hitList);
+                        if (line nxt.len() < 0.01) {
+                            projRemove(line q);
+                            return 0;
+                        }
+                        line vel = (line nxt - line c).setLength(line vel.len());
+                        line end = line c;
+                    } else {
+                        projRemove(line q);
+                        return 0;
+                    }
+                }
+            }
+        }
+    }
+    if (line blocked == 1) {
+        projImpact(line q, line end - line vel.setLength(0.3), "");
+        projRemove(line q);
+        return 0;
+    }
+    line q["pos"] = line end;
+    line q["vel"] = line vel;
+    select entitiesByName(q["id"] as str);
+    selectedEntity.teleport(loc(line end.x, line end.y, line end.z));
+    if (line age % 3 == 0 && pNum(q, "grav") > 0) {
+        selectedEntity.setDisplayTransformationMatrix(alongMatrix(line vel, 1));
+    }
+    select reset;
+    projTrail(line q, line end);
+    global projCur = line q;
+    return 1;
+}
+
+/** Trail particles behind a spell projectile. */
+function projTrail(q: dict, p: vec) {
+    line e = q["elem"] as str;
+    if (e == "phys") {
+        return;
+    }
+    line l = loc(p.x, p.y, p.z);
+    if (e == "fire") {
+        allPlayers.displayParticleEffect(par("Flame", amount=2, spreadHoriz=0.1, spreadVert=0.1), line l);
+    } else if (e == "ice") {
+        allPlayers.displayParticleEffect(par("Snowflake", amount=2, spreadHoriz=0.1, spreadVert=0.1), line l);
+    } else if (e == "lightning") {
+        allPlayers.displayParticleEffect(par("Electric Spark", amount=2, spreadHoriz=0.1, spreadVert=0.1), line l);
+    } else if (e == "shadow") {
+        allPlayers.displayParticleEffect(par("Soul", amount=1), line l);
+    } else if (e == "life" || e == "light") {
+        allPlayers.displayParticleEffect(par("End Rod", amount=1), line l);
+    } else if (e == "poison") {
+        allPlayers.displayParticleEffect(par("Dust", amount=2, spreadHoriz=0.1, spreadVert=0.1, color="#7ACC3A", size=1), line l);
+    } else {
+        allPlayers.displayParticleEffect(par("Enchant", amount=3, spreadHoriz=0.1, spreadVert=0.1), line l);
+    }
+}
+
+/** Distance from point c to the segment a-b (3D). */
+function segDist3(c: vec, a: vec, b: vec): num {
+    line ab = b - a;
+    line L2 = line ab.dot(line ab);
+    line t = 0;
+    if (line L2 > 0.001) {
+        line t = num.clamp((c - a).dot(line ab) / line L2, 0, 1);
+    }
+    return (c - (a + line ab * line t)).len();
+}
+
+/** Where a homing projectile steers: the nearest enemy (or player for
+ * enemy missiles); zero vector for none. */
+function projHomingTarget(q: dict, pos: vec): vec {
+    if (q["owner"] == "enemy") {
+        line best = vec(0, 0, 0);
+        line bd = 30;
+        for (line uuid, line b of global pBody) {
+            line c = bodyFeet(line uuid) + vec(0, 1, 0);
+            if ((line c - pos).len() < line bd) {
+                line bd = (line c - pos).len();
+                line best = line c;
+            }
+        }
+        return line best;
+    }
+    line best = vec(0, 0, 0);
+    line bd = 18;
+    for (line id of enemiesNear(pos, 18)) {
+        line c = enemyCenter(line id);
+        if ((line c - pos).len() < line bd) {
+            line bd = (line c - pos).len();
+            line best = line c;
+        }
+    }
+    return line best;
+}
+
+/** The next enemy for a bouncing projectile: nearest within 10 not hit. */
+function projBounceTarget(from: vec, hit: list[str]): vec {
+    line best = vec(0, 0, 0);
+    line bd = 10;
+    for (line id of enemiesNear(from, 10)) {
+        if (hit.find(line id) == 0) {
+            line c = enemyCenter(line id);
+            if ((line c - from).len() < line bd) {
+                line bd = (line c - from).len();
+                line best = line c;
+            }
+        }
+    }
+    return line best;
+}
+
+/** What a projectile does where it lands (direct hit on enemy id, or ""
+ * for the ground). Spells may burst. */
+function projImpact(q: dict, at: vec, id: str) {
+    line owner = q["owner"] as str;
+    line e = q["elem"] as str;
+    if (q.hasKeys("spell")) {
+        spellImpact(q, at, id);
+        return;
+    }
+    if (id != "" && owner != "enemy") {
+        line crit = 0;
+        line dmg = pNum(q, "dmg");
+        if (num.randomd(0, 1) < stat(owner, "crit")) {
+            line crit = 1;
+            line dmg = line dmg * 1.75;
+        }
+        hitEnemy(id, line dmg, line crit, at - (q["vel"] as vec), 0.3, owner, e);
+    }
+    if (pNum(q, "burst") > 0) {
+        fxBurst(at, e, pNum(q, "burst"));
+    } else if (e != "phys") {
+        fxBurst(at, e, 0.4);
+    }
+}
+
+/** Removes projectile q's display. */
+function projRemove(q: dict) {
+    select entitiesByName(q["id"] as str);
+    selectedEntity.remove();
+    select reset;
+}

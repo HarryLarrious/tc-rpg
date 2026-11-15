@@ -196,7 +196,12 @@ function bodyTick(): num {
     select reset;
 
     // Facing: along the move, or where the camera looks while aiming.
-    if (global pAim[line uuid] > 0 || actionFacesCamera(line uuid) == 1) {
+    line lockT = lockOnTarget(line uuid);
+    if (line lockT != "") {
+        line tp = enemyCenter(line lockT);
+        line want = yawOf(vec(line tp.x - line feet.x, 0, line tp.z - line feet.z));
+        line yaw = line yaw + num.clamp(wrapDeg(line want - line yaw), -30, 30);
+    } else if (global pAim[line uuid] > 0 || actionFacesCamera(line uuid) == 1) {
         line want = yawOf(line fwd);
         line yaw = line yaw + num.clamp(wrapDeg(line want - line yaw), -30, 30);
     } else if (line moving == 1) {
@@ -219,6 +224,10 @@ function bodyTick(): num {
     line cam = line want;
     if (line got.len() < line rl + 0.25) {
         line cam = line pivot + line ray.setLength(num.max(0.3, line got.len() - 0.35));
+    }
+    if (global pShake[line uuid] > 0) {
+        line k = global pShake[line uuid];
+        line cam = line cam + vec(num.randomd(0 - line k, line k), num.randomd(0 - line k, line k), num.randomd(0 - line k, line k)) * 0.5;
     }
     select entitiesByName(global pBoom[line uuid]);
     selectedEntity.teleport(loc(line cam.x, line cam.y - global boomEye, line cam.z));

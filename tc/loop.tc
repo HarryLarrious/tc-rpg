@@ -1,0 +1,61 @@
+// The game loop: one process for everything that is not per player
+// (effects, projectiles, monsters, spawning, NPCs).
+
+/** Running game loop id and its last heartbeat. */
+declare global gLoopId: num;
+declare global gBeat: num;
+
+/** Starts the game loop unless one is running. */
+function ensureGameLoop {
+    if (global gLoopId == 0 || game.ticksSinceStartup - global gBeat > 10) {
+        start gameLoop;
+    }
+}
+
+process gameLoop {
+    global gLoopId = game.ticksSinceStartup + 1;
+    line me = global gLoopId;
+    planLoad();
+    if (saved wAuto == 1 && global wRun == 0) {
+        start worldBuilder;
+    }
+    while (global gLoopId == line me) {
+        global gBeat = game.ticksSinceStartup;
+        global tick += 1;
+        fxTick();
+        projTick();
+        // Monsters think every other tick, half of them each tick.
+        line n = global eList.len();
+        if (line n > 0) {
+            line ids = global eList;
+            repeat (line i to line n) {
+                if ((line i + global tick) % 2 == 0) {
+                    line id = line ids[line i];
+                    if (global eHp.hasKeys(line id)) {
+                        enemyTick(line id);
+                    }
+                }
+            }
+        }
+        if (global tick % 40 == 0) {
+            spawnerTick();
+        }
+        if (global tick % 20 == 0) {
+            poisonTick();
+        }
+        zoneTick();
+        familiarTick();
+        npcTick();
+        wait;
+    }
+}
+
+/** Poison on players: a little damage each second. */
+function poisonTick {
+    for (line uuid, line t of global pPoison) {
+        if (line t > now() && global pBody.hasKeys(line uuid)) {
+            global pHp[line uuid] = num.max(1, global pHp[line uuid] - 2);
+            fxText(bodyFeet(line uuid) + vec(0, 2.2, 0), "<#8AE04A>-2", 0);
+        }
+    }
+}

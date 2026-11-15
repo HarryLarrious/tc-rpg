@@ -1,0 +1,485 @@
+// Parametric buildings: walls with timber frames, floors, windows, a door
+// to the street, a gable or hip roof, chimneys and interiors by type.
+// A building is a wBlds record {type, x0, z0, x1, z1, facing, floors}.
+
+/** Fills a box with block b. */
+function fill(b: str, x0: num, y0: num, z0: num, x1: num, y1: num, z1: num) {
+    game.setRegion(item(b), loc(x0, y0, z0), loc(x1, y1, z1));
+}
+
+/** Fills a box with block b and block data d ("facing=north,..."). */
+function fillD(b: str, x0: num, y0: num, z0: num, x1: num, y1: num, z1: num, d: str) {
+    game.setRegion(item(b), loc(x0, y0, z0), loc(x1, y1, z1), d);
+}
+
+/** Sets one block. */
+function put(b: str, x: num, y: num, z: num) {
+    game.setBlock(item(b), loc(x, y, z));
+}
+
+/** Sets one block with data. */
+function putD(b: str, x: num, y: num, z: num, d: str) {
+    game.setBlock(item(b), loc(x, y, z), d);
+}
+
+/** Opposite of a facing. */
+function oppFacing(f: str): str {
+    line o = {north: "south", south: "north", east: "west", west: "east"};
+    return line o[f] as str;
+}
+
+/** Display names of building types. */
+function bldName(t: str): str {
+    line n = {
+        keep: "Lord's Keep", guild: "Adventurers' Guild", inn: "The Gilded Stag Inn", library: "Arcane Library",
+        armory: "Armory", blacksmith: "Blacksmith", chapel: "Chapel of Dawn", tavern: "The Drowned Rat Tavern",
+        alchemist: "Alchemist", store: "General Store", bakery: "Bakery", magetower: "Mage Tower",
+        barracks: "Barracks", stables: "Stables", house: "House", farm: "Farm"
+    };
+    if (line n.hasKeys(t)) {
+        return line n[t] as str;
+    }
+    return t;
+}
+
+/** Palette for building type t and hash h: [foundation, lower wall, upper
+ * wall, beam log, floor, roof (stairs/slab prefix), roof block, door]. */
+function palette(t: str, h: num): list[str] {
+    if (t == "keep" || t == "barracks") {
+        return ["cobblestone", "stone_bricks", "stone_bricks", "dark_oak_log", "dark_oak_planks", "deepslate_tile", "deepslate_tiles", "dark_oak_door"];
+    }
+    if (t == "chapel") {
+        return ["stone_bricks", "polished_andesite", "polished_andesite", "stripped_spruce_log", "spruce_planks", "deepslate_tile", "deepslate_tiles", "spruce_door"];
+    }
+    if (t == "magetower") {
+        return ["deepslate_bricks", "deepslate_bricks", "polished_blackstone_bricks", "crimson_stem", "crimson_planks", "purpur", "purpur_block", "crimson_door"];
+    }
+    if (t == "library") {
+        return ["stone_bricks", "bricks", "bricks", "dark_oak_log", "dark_oak_planks", "deepslate_tile", "deepslate_tiles", "dark_oak_door"];
+    }
+    if (t == "blacksmith" || t == "armory") {
+        return ["cobblestone", "cobblestone", "stone_bricks", "spruce_log", "spruce_planks", "dark_oak", "dark_oak_planks", "spruce_door"];
+    }
+    line walls = ["white_terracotta", "white_terracotta", "smooth_sandstone", "mud_bricks", "stripped_birch_wood"];
+    line roofs = ["dark_oak", "spruce", "deepslate_tile", "brick", "mangrove", "dark_oak"];
+    line roofBlocks = ["dark_oak_planks", "spruce_planks", "deepslate_tiles", "bricks", "mangrove_planks", "dark_oak_planks"];
+    line beams = ["dark_oak_log", "spruce_log", "stripped_dark_oak_log", "oak_log"];
+    line ri = 1 + num.floor(h / 11) % 6;
+    line lower = "cobblestone";
+    if (num.floor(h / 5) % 3 == 0) {
+        line lower = "stone_bricks";
+    }
+    line upper = line walls[1 + num.floor(h / 3) % 5] as str;
+    line floorM = ["oak_planks", "spruce_planks", "dark_oak_planks"][1 + num.floor(h / 13) % 3] as str;
+    line door = ["oak_door", "spruce_door", "dark_oak_door"][1 + num.floor(h / 17) % 3] as str;
+    return ["cobblestone", line lower, line upper, line beams[1 + num.floor(h / 7) % 4] as str, line floorM, line roofs[line ri] as str, line roofBlocks[line ri] as str, line door];
+}
+
+/** Door position of building b: [x, z] just inside the facing wall. */
+function bldDoor(b: dict): list[num] {
+    line x0 = b["x0"] as num;
+    line z0 = b["z0"] as num;
+    line x1 = b["x1"] as num;
+    line z1 = b["z1"] as num;
+    line f = b["facing"] as str;
+    line xm = num.floor((line x0 + line x1) / 2);
+    line zm = num.floor((line z0 + line z1) / 2);
+    if (line f == "north") { return [line xm, line z0]; }
+    if (line f == "south") { return [line xm, line z1]; }
+    if (line f == "west") { return [line x0, line zm]; }
+    return [line x1, line zm];
+}
+
+/** Outward unit step of facing f: [dx, dz]. */
+function facingStep(f: str): list[num] {
+    if (f == "north") { return [0, -1]; }
+    if (f == "south") { return [0, 1]; }
+    if (f == "west") { return [-1, 0]; }
+    return [1, 0];
+}
+
+/** Gable roof over x0..x1 x z0..z1 starting at y, ridge along the longer
+ * side. gable is the end-wall block. */
+function roofGable(x0: num, z0: num, x1: num, z1: num, y: num, mat: str, gable: str) {
+    line st = "%var(mat)_stairs";
+    line sl = "%var(mat)_slab";
+    if (x1 - x0 >= z1 - z0) {
+        line i = 0;
+        while (z0 - 1 + line i < z1 + 1 - line i) {
+            line zs = z0 - 1 + line i;
+            line zn = z1 + 1 - line i;
+            fillD(line st, x0 - 1, y + line i, line zs, x1 + 1, y + line i, line zs, "facing=south,half=bottom");
+            fillD(line st, x0 - 1, y + line i, line zn, x1 + 1, y + line i, line zn, "facing=north,half=bottom");
+            if (line i >= 1 && line zs + 1 <= line zn - 1) {
+                fill(gable, x0, y + line i, line zs + 1, x0, y + line i, line zn - 1);
+                fill(gable, x1, y + line i, line zs + 1, x1, y + line i, line zn - 1);
+            }
+            line i += 1;
+        }
+        if (z0 - 1 + line i == z1 + 1 - line i) {
+            fillD(line sl, x0 - 1, y + line i, z0 - 1 + line i, x1 + 1, y + line i, z0 - 1 + line i, "type=bottom");
+        }
+    } else {
+        line i = 0;
+        while (x0 - 1 + line i < x1 + 1 - line i) {
+            line xw = x0 - 1 + line i;
+            line xe = x1 + 1 - line i;
+            fillD(line st, line xw, y + line i, z0 - 1, line xw, y + line i, z1 + 1, "facing=east,half=bottom");
+            fillD(line st, line xe, y + line i, z0 - 1, line xe, y + line i, z1 + 1, "facing=west,half=bottom");
+            if (line i >= 1 && line xw + 1 <= line xe - 1) {
+                fill(gable, line xw + 1, y + line i, z0, line xe - 1, y + line i, z0);
+                fill(gable, line xw + 1, y + line i, z1, line xe - 1, y + line i, z1);
+            }
+            line i += 1;
+        }
+        if (x0 - 1 + line i == x1 + 1 - line i) {
+            fillD(line sl, x0 - 1 + line i, y + line i, z0 - 1, x0 - 1 + line i, y + line i, z1 + 1, "type=bottom");
+        }
+    }
+}
+
+/** Hip (pyramid) roof: rings of stairs stepping inward. */
+function roofHip(x0: num, z0: num, x1: num, z1: num, y: num, mat: str, top: str) {
+    line st = "%var(mat)_stairs";
+    line i = 0;
+    while (x0 - 1 + line i <= x1 + 1 - line i && z0 - 1 + line i <= z1 + 1 - line i) {
+        line a = x0 - 1 + line i;
+        line b = x1 + 1 - line i;
+        line c = z0 - 1 + line i;
+        line d = z1 + 1 - line i;
+        if (line a == line b || line c == line d) {
+            fill(top, line a, y + line i, line c, line b, y + line i, line d);
+        } else {
+            fillD(line st, line a, y + line i, line c, line b, y + line i, line c, "facing=south,half=bottom");
+            fillD(line st, line a, y + line i, line d, line b, y + line i, line d, "facing=north,half=bottom");
+            fillD(line st, line a, y + line i, line c + 1, line a, y + line i, line d - 1, "facing=east,half=bottom");
+            fillD(line st, line b, y + line i, line c + 1, line b, y + line i, line d - 1, "facing=west,half=bottom");
+            fill(top, line a + 1, y + line i, line c + 1, line b - 1, y + line i, line d - 1);
+        }
+        line i += 1;
+    }
+}
+
+/** Builds wall faces, frame, floors and windows of one storey at y0 (the
+ * floor) of the box, wall height wh. */
+function storey(x0: num, z0: num, x1: num, z1: num, y0: num, wh: num, wall: str, beam: str, floorM: str, glass: str) {
+    line y1 = y0 + wh;
+    fill(wall, x0, y0 + 1, z0, x1, y1, z0);
+    fill(wall, x0, y0 + 1, z1, x1, y1, z1);
+    fill(wall, x0, y0 + 1, z0, x0, y1, z1);
+    fill(wall, x1, y0 + 1, z0, x1, y1, z1);
+    // Corner posts and a beam ring at the top.
+    for (line c of [vec(x0, 0, z0), vec(x1, 0, z0), vec(x0, 0, z1), vec(x1, 0, z1)]) {
+        fillD(beam, line c.x, y0 + 1, line c.z, line c.x, y1, line c.z, "axis=y");
+    }
+    fillD(beam, x0, y1 + 1, z0, x1, y1 + 1, z0, "axis=x");
+    fillD(beam, x0, y1 + 1, z1, x1, y1 + 1, z1, "axis=x");
+    fillD(beam, x0, y1 + 1, z0 + 1, x0, y1 + 1, z1 - 1, "axis=z");
+    fillD(beam, x1, y1 + 1, z0 + 1, x1, y1 + 1, z1 - 1, "axis=z");
+    fill(floorM, x0 + 1, y1 + 1, z0 + 1, x1 - 1, y1 + 1, z1 - 1);
+    // Windows every third block, posts between long spans.
+    line wy0 = y0 + 2;
+    line wy1 = y0 + 2;
+    if (wh >= 4) {
+        line wy1 = y0 + 3;
+    }
+    line x = x0 + 2;
+    while (x <= x1 - 2) {
+        if ((x - x0) % 4 == 0) {
+            fillD(beam, x, y0 + 1, z0, x, y1, z0, "axis=y");
+            fillD(beam, x, y0 + 1, z1, x, y1, z1, "axis=y");
+        } else if ((x - x0) % 4 == 2) {
+            fillD(glass, x, line wy0, z0, x, line wy1, z0, "east=true,west=true");
+            fillD(glass, x, line wy0, z1, x, line wy1, z1, "east=true,west=true");
+        }
+        line x += 1;
+    }
+    line z = z0 + 2;
+    while (z <= z1 - 2) {
+        if ((z - z0) % 4 == 0) {
+            fillD(beam, x0, y0 + 1, z, x0, y1, z, "axis=y");
+            fillD(beam, x1, y0 + 1, z, x1, y1, z, "axis=y");
+        } else if ((z - z0) % 4 == 2) {
+            fillD(glass, x0, line wy0, z, x0, line wy1, z, "north=true,south=true");
+            fillD(glass, x1, line wy0, z, x1, line wy1, z, "north=true,south=true");
+        }
+        line z += 1;
+    }
+}
+
+/** Builds building i of the plan. */
+function buildBuilding(i: num) {
+    line b = global wBlds[i];
+    line t = b["type"] as str;
+    if (line t == "none") {
+        return;
+    }
+    if (line t == "farm") {
+        buildFarm(b, i);
+        return;
+    }
+    line x0 = b["x0"] as num;
+    line z0 = b["z0"] as num;
+    line x1 = b["x1"] as num;
+    line z1 = b["z1"] as num;
+    line f = b["facing"] as str;
+    line floors = b["floors"] as num;
+    line h = wHash(i, 31, worldSeed());
+    line p = palette(line t, line h);
+    line G = townY();
+    line wh = 3;
+    if (line t == "chapel") {
+        line wh = 7;
+    } else if (line t == "keep" || line t == "guild" || line t == "library") {
+        line wh = 4;
+    }
+    line sh = line wh + 1;
+    line top = line G + line sh * line floors;
+    line span = num.min(x1 - x0, z1 - z0);
+    // Foundation, then clear the volume.
+    fill(line p[1], x0, line G - 3, z0, x1, line G, z1);
+    fill("air", x0 - 1, line G + 1, z0 - 1, x1 + 1, line top + line span / 2 + 3, z1 + 1);
+    fill(line p[5], x0 + 1, line G, z0 + 1, x1 - 1, line G, z1 - 1);
+    // Storeys.
+    line glass = "glass_pane";
+    if (line t == "chapel") {
+        line glass = "yellow_stained_glass_pane";
+    } else if (line t == "magetower") {
+        line glass = "purple_stained_glass_pane";
+    }
+    repeat (line k to line floors) {
+        line wall = line p[3];
+        if (line k == 1) {
+            line wall = line p[2];
+        }
+        storey(x0, z0, x1, z1, line G + (line k - 1) * line sh, line wh, line wall, line p[4], line p[5], line glass);
+        wBreathe(2);
+    }
+    // Door, a step and a lantern beside it.
+    line dr = bldDoor(b);
+    line dx = line dr[1];
+    line dz = line dr[2];
+    line st = facingStep(line f);
+    putD(line p[8], line dx, line G + 1, line dz, "facing=%var(f),half=lower");
+    putD(line p[8], line dx, line G + 2, line dz, "facing=%var(f),half=upper");
+    put("air", line dx, line G + 3, line dz);
+    fillD(line p[4], line dx, line G + 3, line dz, line dx, line G + 3, line dz, "axis=y");
+    fill("stone_bricks", line dx + line st[1], line G, line dz + line st[2], line dx + line st[1] * 2, line G, line dz + line st[2] * 2);
+    // Lantern on a post beside the door (wall-mounted look).
+    line lx = line dx + line st[1] + line st[2];
+    line lz = line dz + line st[2] + line st[1];
+    putD("lantern", line lx, line G + 3, line lz, "hanging=false");
+    put("dark_oak_fence", line lx, line G + 1, line lz);
+    put("dark_oak_fence", line lx, line G + 2, line lz);
+    // Ladder up through the floors, in the corner away from the door.
+    if (line floors > 1) {
+        line cx = x1 - 1;
+        line cz = z1 - 1;
+        line lf = "west";
+        if (line f == "south") {
+            line cz = z0 + 1;
+        }
+        if (line f == "east") {
+            line cx = x0 + 1;
+            line lf = "east";
+        }
+        fill("air", line cx, line G + 1, line cz, line cx, line top - 1, line cz);
+        fillD("ladder", line cx, line G + 1, line cz, line cx, line top - line sh + 1, line cz, "facing=%var(lf)");
+    }
+    // Roof.
+    if (line t == "magetower" || line t == "keep") {
+        roofHip(x0, z0, x1, z1, line top + 1, line p[6], line p[7]);
+    } else {
+        roofGable(x0, z0, x1, z1, line top + 1, line p[6], line p[3]);
+    }
+    // Chimney on houses with a hearth.
+    if (line t == "house" || line t == "bakery" || line t == "blacksmith" || line t == "inn" || line t == "tavern") {
+        if (line h % 2 == 0 || line t != "house") {
+            line chx = x0 + 1;
+            line chz = z0 + 1;
+            if (line f == "north") {
+                line chz = z1 - 1;
+            }
+            fill("bricks", line chx, line G + 1, line chz, line chx, line top + line span / 2 + 2, line chz);
+            putD("campfire", line chx, line top + line span / 2 + 3, line chz, "lit=true,signal_fire=false");
+            put("furnace", line chx, line G + 1, line chz);
+        }
+    }
+    if (line t == "keep") {
+        keepTowers(x0, z0, x1, z1, line G, line top);
+    } else if (line t == "chapel") {
+        chapelTower(b, line G);
+    }
+    interior(b, i, line G, line p);
+    wBreathe(3);
+}
+
+/** Four corner towers on the keep. */
+function keepTowers(x0: num, z0: num, x1: num, z1: num, G: num, top: num) {
+    for (line c of [vec(x0, 0, z0), vec(x1 - 2, 0, z0), vec(x0, 0, z1 - 2), vec(x1 - 2, 0, z1 - 2)]) {
+        fill("stone_bricks", line c.x - 1, G, line c.z - 1, line c.x + 3, top + 5, line c.z + 3);
+        fill("air", line c.x, top + 4, line c.z, line c.x + 2, top + 5, line c.z + 2);
+        roofHip(line c.x - 1, line c.z - 1, line c.x + 3, line c.z + 3, top + 6, "deepslate_tile", "deepslate_tiles");
+        fillD("glass_pane", line c.x + 1, G + 6, line c.z - 1, line c.x + 1, G + 7, line c.z - 1, "east=true,west=true");
+    }
+}
+
+/** A bell tower at the chapel's door end. */
+function chapelTower(b: dict, G: num) {
+    line dr = bldDoor(b);
+    line x = dr[1];
+    line z = dr[2];
+    fill("stone_bricks", x - 2, G + 1, z - 2, x + 2, G + 15, z + 2);
+    fill("air", x - 1, G + 12, z - 1, x + 1, G + 14, z + 1);
+    fill("air", x - 2, G + 12, z, x + 2, G + 14, z);
+    fill("air", x, G + 12, z - 2, x, G + 14, z + 2);
+    putD("bell", x, G + 13, z, "attachment=ceiling");
+    roofHip(x - 2, z - 2, x + 2, z + 2, G + 16, "deepslate_tile", "deepslate_tiles");
+    fill("air", x, G + 1, z, x, G + 2, z);
+}
+
+/** Furnishes the ground floor of building b by its type. */
+function interior(b: dict, i: num, G: num, p: list[str]) {
+    line t = b["type"] as str;
+    line x0 = (b["x0"] as num) + 1;
+    line z0 = (b["z0"] as num) + 1;
+    line x1 = (b["x1"] as num) - 1;
+    line z1 = (b["z1"] as num) - 1;
+    line f = b["facing"] as str;
+    line y = G + 1;
+    line xm = num.floor((line x0 + line x1) / 2);
+    line zm = num.floor((line z0 + line z1) / 2);
+    // Back wall row (away from the door) and side walls.
+    line bz = line z1;
+    if (line f == "south") {
+        line bz = line z0;
+    }
+    line horizontal = 1;
+    if (line f == "east" || line f == "west") {
+        line horizontal = 0;
+    }
+    putD("lantern", line xm, G + 3, line zm, "hanging=true");
+    if (line t == "blacksmith") {
+        put("anvil", line xm, line y, line zm);
+        put("blast_furnace", line x0, line y, line z0);
+        put("smithing_table", line x1, line y, line z0);
+        put("grindstone", line x0, line y, line z1);
+        put("lava_cauldron", line x1, line y, line z1);
+        put("chain", line xm, G + 2, line zm + 1);
+    } else if (line t == "armory") {
+        fill("barrel", line x0, line y, line z0, line x0, line y + 1, line z1);
+        fill("barrel", line x1, line y, line z0, line x1, line y + 1, line z1);
+        put("smithing_table", line xm, line y, line zm);
+        fill("iron_bars", line x0 + 1, line y, line bz, line x1 - 1, line y + 1, line bz);
+    } else if (line t == "library" || line t == "magetower") {
+        fill("bookshelf", line x0, line y, line z0, line x0, line y + 2, line z1);
+        fill("bookshelf", line x1, line y, line z0, line x1, line y + 2, line z1);
+        put("enchanting_table", line xm, line y, line zm);
+        putD("lectern", line xm - 1, line y, line zm, "facing=east");
+        put("red_carpet", line xm + 1, line y, line zm);
+        if (line t == "magetower") {
+            put("amethyst_cluster", line x0 + 1, line y, line z0);
+            put("end_rod", line x1 - 1, line y, line z1);
+        }
+    } else if (line t == "inn" || line t == "tavern") {
+        fill("barrel", line x0, line y, line z0, line x0, line y, line z1);
+        fillD("spruce_stairs", line xm - 1, line y, line zm, line xm - 1, line y, line zm, "facing=east");
+        put("spruce_fence", line xm, line y, line zm);
+        put("spruce_pressure_plate", line xm, line y + 1, line zm);
+        fillD("spruce_stairs", line xm + 1, line y, line zm, line xm + 1, line y, line zm, "facing=west");
+        put("brewing_stand", line x1, line y, line z0);
+        put("cauldron", line x1, line y, line z1);
+    } else if (line t == "guild") {
+        fill("oak_planks", line x0 + 1, line y + 1, line bz, line x1 - 1, line y + 2, line bz);
+        put("cartography_table", line xm, line y, line zm);
+        put("chest", line x0, line y, line z0);
+        put("chest", line x1, line y, line z0);
+        put("target", line x1, line y, line z1);
+    } else if (line t == "keep") {
+        fill("red_carpet", line xm - 1, line y, line z0, line xm + 1, line y, line z1);
+        fillD("quartz_stairs", line xm, line y, line bz, line xm, line y, line bz, "facing=%var(f)");
+        put("gold_block", line xm - 1, line y, line bz);
+        put("gold_block", line xm + 1, line y, line bz);
+    } else if (line t == "chapel") {
+        line z = line z0 + 1;
+        while (line z <= line z1 - 2) {
+            fillD("spruce_stairs", line x0 + 1, line y, line z, line xm - 1, line y, line z, "facing=north");
+            fillD("spruce_stairs", line xm + 1, line y, line z, line x1 - 1, line y, line z, "facing=north");
+            line z += 2;
+        }
+        put("quartz_block", line xm, line y, line bz);
+        put("candle", line xm, line y + 1, line bz);
+    } else if (line t == "alchemist") {
+        put("brewing_stand", line x0, line y, line z0);
+        put("cauldron", line x1, line y, line z0);
+        put("barrel", line x0, line y, line z1);
+        put("potted_red_mushroom", line x1, line y, line z1);
+    } else if (line t == "store") {
+        fill("barrel", line x0, line y, line z0, line x0, line y + 1, line z1);
+        put("chest", line x1, line y, line z0);
+        fillD("oak_slab", line x0 + 1, line y, line zm, line x1 - 1, line y, line zm, "type=top");
+    } else if (line t == "bakery") {
+        put("smoker", line x0, line y, line z0);
+        put("hay_block", line x1, line y, line z0);
+        put("barrel", line x1, line y, line z1);
+        put("cake", line xm, line y, line zm);
+    } else if (line t == "barracks") {
+        line x = line x0;
+        while (line x <= line x1) {
+            putD("red_bed", line x, line y, line bz, "facing=%var(f),part=head");
+            line x += 2;
+        }
+        put("target", line x0, line y, line z0);
+    } else if (line t == "stables") {
+        fill("hay_block", line x0, line y, line z0, line x0 + 1, line y, line z1);
+        put("composter", line x1, line y, line z1);
+    } else {
+        // House: bed, table, a chest and a crafting table.
+        put("crafting_table", line x0, line y, line z0);
+        put("chest", line x1, line y, line z0);
+        putD("white_bed", line x0, line y, line z1, "facing=east,part=head");
+        put("oak_fence", line xm, line y, line zm);
+        put("oak_pressure_plate", line xm, line y + 1, line zm);
+        put("potted_poppy", line x1, line y, line z1);
+    }
+}
+
+/** A fenced farm field with crops, a water channel and a scarecrow. */
+function buildFarm(b: dict, i: num) {
+    line x0 = b["x0"] as num;
+    line z0 = b["z0"] as num;
+    line x1 = b["x1"] as num;
+    line z1 = b["z1"] as num;
+    line G = groundY(num.floor((x0 + x1) / 2), num.floor((z0 + z1) / 2));
+    if (line G < waterY()) {
+        return;
+    }
+    line crops = ["wheat", "carrots", "potatoes", "beetroots", "wheat"];
+    line crop = line crops[1 + wHash(i, 3, 9) % 5] as str;
+    line age = "age=7";
+    if (line crop == "beetroots") {
+        line age = "age=3";
+    }
+    fill("dirt", x0, line G - 3, z0, x1, line G - 1, z1);
+    fill("air", x0, line G + 1, z0, x1, line G + 4, z1);
+    fillD("farmland", x0 + 1, line G, z0 + 1, x1 - 1, line G, z1 - 1, "moisture=7");
+    fillD(line crop, x0 + 1, line G + 1, z0 + 1, x1 - 1, line G + 1, z1 - 1, line age);
+    line xm = num.floor((x0 + x1) / 2);
+    fill("water_bucket", line xm, line G, z0 + 1, line xm, line G, z1 - 1);
+    fill("air", line xm, line G + 1, z0 + 1, line xm, line G + 1, z1 - 1);
+    fill("grass_block", x0, line G, z0, x1, line G, z0);
+    fill("grass_block", x0, line G, z1, x1, line G, z1);
+    fill("grass_block", x0, line G, z0, x0, line G, z1);
+    fill("grass_block", x1, line G, z0, x1, line G, z1);
+    fill("oak_fence", x0, line G + 1, z0, x1, line G + 1, z0);
+    fill("oak_fence", x0, line G + 1, z1, x1, line G + 1, z1);
+    fill("oak_fence", x0, line G + 1, z0, x0, line G + 1, z1);
+    fill("oak_fence", x1, line G + 1, z0, x1, line G + 1, z1);
+    putD("oak_fence_gate", line xm, line G + 1, z0, "facing=north");
+    // Scarecrow.
+    line sx = x0 + 3;
+    line sz = z0 + 3;
+    put("oak_fence", line sx, line G + 1, line sz);
+    put("hay_block", line sx, line G + 2, line sz);
+    putD("carved_pumpkin", line sx, line G + 3, line sz, "facing=south");
+}

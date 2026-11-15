@@ -1,0 +1,597 @@
+// Monsters: types, spawning by zone, AI (chase, telegraphed attacks,
+// ranged and casting foes), damage, status effects, death and loot.
+//
+// Monsters are vanilla mobs with no goals ("Insentient"), steered by
+// velocity like the player's body, so vanilla AI never targets the real
+// (camera) players. Their health is ours; a text display above each shows
+// name, level and health.
+
+/** Live enemies (UUIDs) and their state, keyed by UUID. */
+declare global eList: list[str];
+declare global eType: dict[str];
+declare global eLvl: dict[num];
+declare global eHp: dict[num];
+declare global eMax: dict[num];
+declare global eState: dict[str];
+declare global eT: dict[num];
+declare global eNext: dict[num];
+declare global eTgt: dict[str];
+declare global ePos: dict[vec];
+declare global eHome: dict[vec];
+declare global eBar: dict[str];
+declare global eStatus: dict[dict];
+declare global eZone: dict[str];
+/** Per boss name: tick it may spawn again. */
+declare saved bossRespawn: dict[num];
+
+/** Monster types: [name, spawn egg, hp, damage, speed, reach, kind (melee,
+ * ranged, caster), radius, scale, xp, held item spec, windup ticks,
+ * cooldown ticks, element]. Numbers are at level 1; level scales them. */
+function monData(t: str): list {
+    line d = {
+        wolf: ["Grey Wolf", "wolf_spawn_egg", 26, 5, 0.27, 1.9, "melee", 0.5, 1, 10, "", 8, 22, "phys"],
+        direwolf: ["Dire Wolf", "wolf_spawn_egg", 70, 11, 0.29, 2.4, "melee", 0.8, 1.6, 30, "", 9, 24, "phys"],
+        goblin: ["Goblin", "zombie_spawn_egg", 30, 6, 0.23, 2, "melee", 0.4, 0.65, 12, "dagger", 10, 26, "phys"],
+        goblinarcher: ["Goblin Archer", "zombie_spawn_egg", 24, 6, 0.2, 14, "ranged", 0.4, 0.65, 14, "bow", 14, 40, "phys"],
+        bandit: ["Bandit", "vindicator_spawn_egg", 55, 9, 0.24, 2.4, "melee", 0.5, 1, 22, "axe", 11, 28, "phys"],
+        crossbowman: ["Bandit Crossbowman", "pillager_spawn_egg", 45, 10, 0.22, 16, "ranged", 0.5, 1, 22, "crossbow", 16, 46, "phys"],
+        chief: ["Varro the Bandit Chief", "vindicator_spawn_egg", 420, 18, 0.25, 3, "melee", 0.7, 1.3, 260, "greataxe", 14, 26, "phys"],
+        spider: ["Cave Spider", "spider_spawn_egg", 40, 8, 0.28, 2.2, "melee", 0.8, 1, 20, "", 8, 22, "poison"],
+        broodmother: ["Brood Mother", "spider_spawn_egg", 600, 22, 0.24, 3.4, "melee", 1.4, 2.2, 400, "", 14, 30, "poison"],
+        skeleton: ["Restless Bones", "skeleton_spawn_egg", 60, 12, 0.23, 2.5, "melee", 0.5, 1, 35, "sword", 11, 28, "phys"],
+        archer: ["Bone Archer", "skeleton_spawn_egg", 50, 12, 0.21, 16, "ranged", 0.5, 1, 38, "bow", 14, 40, "phys"],
+        ghoul: ["Ghoul", "husk_spawn_egg", 80, 14, 0.25, 2.2, "melee", 0.5, 1.05, 40, "", 9, 24, "shadow"],
+        cryptlord: ["The Crypt Lord", "wither_skeleton_spawn_egg", 1200, 30, 0.24, 3.6, "melee", 0.8, 1.6, 900, "greatsword", 16, 30, "shadow"],
+        bear: ["Frost Bear", "polar_bear_spawn_egg", 140, 18, 0.25, 2.8, "melee", 1, 1, 60, "", 13, 32, "ice"],
+        witch: ["Hedge Witch", "witch_spawn_egg", 70, 14, 0.2, 13, "caster", 0.5, 1, 55, "staff", 18, 50, "fire"]
+    };
+    if (line d.hasKeys(t)) {
+        return line d[t] as list;
+    }
+    return line d["wolf"] as list;
+}
+
+/** Monster types and levels of zone z: [[type, minLvl, maxLvl], ...]. */
+function zoneMobs(z: str): list[list] {
+    if (z == "camp") { return [["bandit", 5, 8], ["bandit", 5, 8], ["crossbowman", 6, 8]]; }
+    if (z == "cave") { return [["spider", 8, 12], ["spider", 9, 12], ["goblinarcher", 8, 11]]; }
+    if (z == "grove") { return [["direwolf", 10, 13], ["witch", 11, 14], ["bear", 11, 14]]; }
+    if (z == "ruins") { return [["skeleton", 13, 17], ["archer", 13, 17], ["ghoul", 14, 18]]; }
+    if (z == "mountain") { return [["bear", 15, 19], ["archer", 15, 19], ["direwolf", 15, 18]]; }
+    if (z == "far") { return [["wolf", 4, 7], ["goblin", 4, 7], ["goblinarcher", 5, 7], ["bandit", 5, 7]]; }
+    return [["wolf", 1, 3], ["wolf", 1, 3], ["goblin", 2, 4], ["goblinarcher", 2, 4]];
+}
+
+/** The zone at (x, z): a point of interest nearby, mountains, or the
+ * wilds near or far from town. */
+function zoneAt(x: num, z: num): str {
+    for (line n of ["camp", "cave", "grove", "ruins"]) {
+        if (global wPois.hasKeys(line n)) {
+            line p = global wPois[line n];
+            if (num.root((x - (line p[1] as num)) ** 2 + (z - (line p[2] as num)) ** 2) < 55) {
+                return line n;
+            }
+        }
+    }
+    line de = num.min(num.min(x, z), num.min(global wS - 1 - x, global wS - 1 - z));
+    if (line de < 70) {
+        return "mountain";
+    }
+    line dc = num.root((x - global wCx) ** 2 + (z - global wCz) ** 2);
+    if (line dc > global wR + 220) {
+        return "far";
+    }
+    return "wild";
+}
+
+/** 1 when enemy id is alive. */
+function enemyAlive(id: str): num {
+    if (global eHp.hasKeys(id) && global eHp[id] > 0) {
+        return 1;
+    }
+    return 0;
+}
+
+/** Center of enemy id (last known). */
+function enemyCenter(id: str): vec {
+    if (global ePos.hasKeys(id)) {
+        line s = monData(global eType[id])[9] as num;
+        return global ePos[id] + vec(0, 0.8 * line s, 0);
+    }
+    return vec(0, -100, 0);
+}
+
+/** Hit radius of enemy id. */
+function enemyRadius(id: str): num {
+    return monData(global eType[id])[8] as num;
+}
+
+/** Enemies whose center is within r of p. */
+function enemiesNear(p: vec, r: num): list[str] {
+    line out: list[str] = [];
+    for (line id of global eList) {
+        line c = global ePos[line id];
+        if (num.abs(line c.x - p.x) < r && num.abs(line c.z - p.z) < r) {
+            if ((enemyCenter(line id) - p).len() < r && global eHp[line id] > 0) {
+                line out.append(line id);
+            }
+        }
+    }
+    return line out;
+}
+
+/** Spawns a monster of type t at level lvl at p. Returns its UUID. */
+function spawnMonster(t: str, lvl: num, p: vec, zone: str): str {
+    line d = monData(t);
+    line egg = line d[2] as str;
+    game.spawnMob(item(egg), loc(p.x, p.y, p.z));
+    line id = lastEntity.uuid;
+    if (line id == "" || line id == 0) {
+        return "";
+    }
+    lastEntity.setAI(ai="Insentient");
+    lastEntity.setInvulnerable(invulnerable="Enable");
+    lastEntity.setMovementAttribute(1.05, attr="Step height");
+    lastEntity.setMiscellaneousAttribute(line d[9] as num, attr="Scale");
+    lastEntity.setMiscellaneousAttribute(0, attr="Name tag distance");
+    // Any helmet keeps undead from burning in daylight.
+    lastEntity.setEquipmentItem(item("paper").setModel("rpg:empty"), slot="Head");
+    line held = line d[11] as str;
+    if (line held != "") {
+        line md = matData(num.clamp(num.floor(lvl / 4) + 1, 1, 9));
+        lastEntity.setEquipmentItem(item("paper").setModel("rpg:weapon/%var(held)").setModelDataNumbers([line md[3] as num, line md[4] as num, line md[5] as num], type="Colors"), slot="Main hand");
+    } else {
+        lastEntity.setEquipmentItem(item("air"), slot="Main hand");
+    }
+    if (t == "goblin" || t == "goblinarcher") {
+        lastEntity.setEquipmentItem(item("leather_chestplate").setColor("#4E7A2E"), slot="Body");
+    }
+    line hp = num.round((line d[3] as num) * (1 + (lvl - 1) * 0.28));
+    global eList.append(line id);
+    global eType[line id] = t;
+    global eLvl[line id] = lvl;
+    global eHp[line id] = line hp;
+    global eMax[line id] = line hp;
+    global eState[line id] = "idle";
+    global eT[line id] = 0;
+    global eNext[line id] = now() + 20;
+    global eTgt[line id] = "";
+    global ePos[line id] = p;
+    global eHome[line id] = p;
+    global eStatus[line id] = {};
+    global eZone[line id] = zone;
+    // Health label riding the monster.
+    game.spawnTextDisplay(loc(p.x, p.y, p.z), s" ");
+    line bar = lastEntity.uuid;
+    lastEntity.setDisplayBillboard(type="Center");
+    lastEntity.setTextDisplayBackground("#000000", 40);
+    lastEntity.setDisplayTranslation(0, 0.35, 0);
+    lastEntity.ride(line id);
+    global eBar[line id] = line bar;
+    enemyBarUpdate(line id);
+    return line id;
+}
+
+/** Health label of enemy id. */
+function enemyBarUpdate(id: str) {
+    line d = monData(global eType[id]);
+    line name = d[1] as str;
+    line lvl = global eLvl[id];
+    line f = num.clamp(num.round(global eHp[id] / global eMax[id] * 12), 0, 12);
+    line a = cells(line f);
+    line b = cells(12 - line f);
+    select entitiesByName(global eBar[id]);
+    if ((d[10] as num) >= 200) {
+        selectedEntity.setTextDisplayText(s"<#FF5050><b>%var(name)</b> <gray>Lv%var(lvl)\n<#E0413A>%var(a)<dark_gray>%var(b)");
+    } else {
+        selectedEntity.setTextDisplayText(s"<white>%var(name) <gray>Lv%var(lvl)\n<#E0413A>%var(a)<dark_gray>%var(b)");
+    }
+    select reset;
+}
+
+/** One HUD line for a locked-on enemy. */
+function enemyHudLine(id: str): str {
+    line name = monData(global eType[id])[1] as str;
+    line hp = num.ceil(global eHp[id]);
+    return "◎ %var(name) %var(hp)";
+}
+
+/** Removes enemy id (no reward). */
+function enemyRemove(id: str) {
+    select entitiesByName([id, global eBar[id]]);
+    selectedEntity.remove();
+    select reset;
+    line i = global eList.find(id);
+    if (line i != 0) {
+        global eList.remove(line i);
+    }
+    global eHp.remove(id);
+    global eType.remove(id);
+    global ePos.remove(id);
+    global eBar.remove(id);
+    global eStatus.remove(id);
+}
+
+/** Damages enemy id by dmg (from position `from`, knockback k), credited
+ * to player `by`, element elem. */
+function hitEnemy(id: str, dmg: num, crit: num, from: vec, k: num, by: str, elem: str) {
+    if (enemyAlive(id) == 0) {
+        return;
+    }
+    line d = dmg * (1 + global eLvl[id] * 0.0);
+    line c = enemyCenter(id);
+    global eHp[id] = global eHp[id] - line d;
+    fxDamage(line c + vec(0, 0.9, 0), line d, crit, elem);
+    fxBurst(line c, elem, 0.3);
+    global eTgt[id] = by;
+    select entitiesByName(id);
+    selectedEntity.sendAnimation(animationType="Hurt animation");
+    line push = vec(line c.x - from.x, 0, line c.z - from.z);
+    if (line push.len() > 0.05 && k > 0) {
+        line big = 1;
+        if ((monData(global eType[id])[10] as num) >= 200) {
+            line big = 0.25;
+        }
+        selectedEntity.setVelocity(line push.setLength(k * line big) + vec(0, 0.2 * line big, 0));
+    }
+    select reset;
+    if (global eState[id] == "wind" && crit == 1) {
+        // A critical hit interrupts a windup.
+        global eState[id] = "stun";
+        global eT[id] = 12;
+    }
+    if (global eHp[id] <= 0) {
+        enemyDie(id, by);
+    } else {
+        enemyBarUpdate(id);
+    }
+}
+
+/** Enemy id dies: rewards, loot, a death effect. */
+function enemyDie(id: str, by: str) {
+    line t = global eType[id];
+    line d = monData(line t);
+    line lvl = global eLvl[id];
+    line c = enemyCenter(id);
+    global eHp[id] = 0;
+    allPlayers.displayParticleEffect(par("Poof", amount=12, spreadHoriz=0.4, spreadVert=0.5), loc(line c.x, line c.y, line c.z));
+    allPlayers.playSound(snd("Player Attack (Critical)", 0.6, 0.6), loc(line c.x, line c.y, line c.z));
+    line xp = num.round((line d[10] as num) * (1 + (lvl - 1) * 0.35));
+    line gold = num.round((2 + lvl * 1.5) * num.randomd(0.6, 1.4));
+    if (global pBody.hasKeys(by)) {
+        giveXp(by, line xp);
+        giveGold(by, line gold);
+        questOnKill(by, line t);
+        pdSet(by, "kills", (pdGet(by, "kills") as num) + 1);
+        select playersByName(by);
+        line mname = line d[1] as str;
+        selected.sendMessage(s"<gray>%var(mname) defeated: <#9BE27A>+%var(xp) XP <gold>+%var(gold) gold");
+        select reset;
+    }
+    // Loot: monsters sometimes drop gear; bosses always drop something good.
+    line boss = (line d[10] as num) >= 200;
+    if (num.randomd(0, 1) < 0.18 || line boss) {
+        line it = rollLoot(lvl, game.ticksSinceStartup + num.randomd(0, 99999));
+        if (line boss) {
+            line it = makeWeapon(weaponTypes()[1 + num.floor(num.randomd(0, 17))] as str, num.clamp(num.floor(lvl / 4) + 2, 1, 9), num.round(num.randomd(4, 6)), game.ticksSinceStartup);
+        }
+        game.spawnItem(line it, loc(line c.x, line c.y, line c.z));
+    }
+    if (num.randomd(0, 1) < 0.08) {
+        game.spawnItem(makeScroll(randomWord(lvl)), loc(line c.x, line c.y, line c.z));
+    }
+    if (line boss) {
+        saved bossRespawn[line t] = now() + 6000;
+        line bname = line d[1] as str;
+        allPlayers.sendTitle(s"<gold><b>%var(bname)</b>", s"<yellow>has been defeated!", 10, 60, 20);
+    }
+    enemyRemove(id);
+}
+
+/** Status effects on enemy id: burn, chill, poison, stun, root. */
+function enemyStatus(id: str, k: str, ticks: num, power: num) {
+    if (enemyAlive(id) == 0) {
+        return;
+    }
+    line s = global eStatus[id];
+    line s[k] = [now() + ticks, power];
+    global eStatus[id] = line s;
+}
+
+/** 1 while enemy id has status k. */
+function hasStatus(id: str, k: str): num {
+    line s = global eStatus[id];
+    if (line s.hasKeys(k) && ((line s[k] as list)[1] as num) > now()) {
+        return 1;
+    }
+    return 0;
+}
+
+/** Thinks and moves enemy id (every 2 ticks). */
+function enemyTick(id: str) {
+    line d = monData(global eType[id]);
+    select entitiesByName(id);
+    line l = selectedEntity.location;
+    line v = selectedEntity.velocity;
+    select reset;
+    if (line l.y < -60) {
+        enemyRemove(id);
+        return;
+    }
+    line pos = vec(line l.x, line l.y, line l.z);
+    line old = global ePos[id];
+    global ePos[id] = line pos;
+    // Damage over time.
+    line st = global eStatus[id];
+    if (now() % 20 == 0) {
+        for (line k of ["burn", "poison", "bleed"]) {
+            if (line st.hasKeys(line k) && ((line st[line k] as list)[1] as num) > now()) {
+                line pw = (line st[line k] as list)[2] as num;
+                line e = "fire";
+                if (line k == "poison") { line e = "poison"; }
+                if (line k == "bleed") { line e = "phys"; }
+                global eHp[id] = global eHp[id] - line pw;
+                fxDamage(enemyCenter(id) + vec(0, 0.9, 0), line pw, 0, line e);
+                if (global eHp[id] <= 0) {
+                    enemyDie(id, global eTgt[id]);
+                    return;
+                }
+                enemyBarUpdate(id);
+            }
+        }
+    }
+    if (hasStatus(id, "stun") == 1 || hasStatus(id, "root") == 1) {
+        select entitiesByName(id);
+        selectedEntity.setVelocity(vec(0, line v.y, 0));
+        select reset;
+        return;
+    }
+    // Target: the nearest living player body within aggro range.
+    line aggro = 16;
+    if ((d[10] as num) >= 200) {
+        line aggro = 22;
+    }
+    line tgt = "";
+    line tp = vec(0, 0, 0);
+    line bd = line aggro;
+    for (line uuid, line b of global pBody) {
+        if (global pAct[uuid] != "dead") {
+            line f = bodyFeet(uuid);
+            line dd = (line f - line pos).len();
+            if (line dd < line bd || (line uuid == global eTgt[id] && line dd < line aggro * 1.8)) {
+                line bd = line dd;
+                line tgt = line uuid;
+                line tp = line f;
+            }
+        }
+    }
+    line speed = d[5] as num;
+    if (hasStatus(id, "chill") == 1) {
+        line speed = line speed * 0.5;
+    }
+    line state = global eState[id];
+    line want = vec(0, 0, 0);
+    if (line tgt == "") {
+        // Wander near home, heal slowly.
+        global eState[id] = "idle";
+        global eTgt[id] = "";
+        if (global eHp[id] < global eMax[id] && now() % 20 == 0) {
+            global eHp[id] = num.min(global eMax[id], global eHp[id] + global eMax[id] * 0.05);
+            enemyBarUpdate(id);
+        }
+        line home = global eHome[id];
+        if ((line home - line pos).len() > 12) {
+            line want = (line home - line pos).setLength(line speed * 0.6);
+        } else if (wHash(num.floor(now() / 60), num.floor(line pos.x), 3) % 3 == 0) {
+            line a = wHash(num.floor(now() / 60), num.floor(line pos.z), 5) % 360;
+            line want = vec(num.cos(line a), 0, num.sin(line a)) * (line speed * 0.35);
+        }
+    } else {
+        global eTgt[id] = line tgt;
+        line toV = vec(line tp.x - line pos.x, 0, line tp.z - line pos.z);
+        line dist = line toV.len();
+        line kind = d[7] as str;
+        line reach = d[6] as num;
+        if (line state == "wind") {
+            global eT[id] = global eT[id] - 2;
+            if (global eT[id] <= 0) {
+                enemyStrike(id, line tgt, line pos, line tp);
+                global eState[id] = "recover";
+                global eT[id] = 8;
+                global eNext[id] = now() + (d[13] as num);
+            }
+        } else if (line state == "recover" || line state == "stun") {
+            global eT[id] = global eT[id] - 2;
+            if (global eT[id] <= 0) {
+                global eState[id] = "chase";
+            }
+        } else {
+            global eState[id] = "chase";
+            if (line kind == "melee") {
+                if (line dist > line reach * 0.8) {
+                    line want = line toV.setLength(line speed);
+                } else if (now() >= global eNext[id]) {
+                    enemyWindup(id, d);
+                }
+            } else {
+                // Ranged: keep a middle distance and shoot when ready.
+                if (line dist > line reach) {
+                    line want = line toV.setLength(line speed);
+                } else if (line dist < line reach * 0.45) {
+                    line want = line toV.setLength(0 - line speed * 0.8);
+                } else if (now() >= global eNext[id]) {
+                    enemyWindup(id, d);
+                }
+            }
+        }
+        // Face the target.
+        select entitiesByName(id);
+        selectedEntity.setRotation(0, yawOf(line toV));
+        select reset;
+    }
+    // Move; hop when stuck against a block.
+    line vy = line v.y;
+    if (line want.len() > 0.05 && (line pos - line old).len() < 0.05 && line v.y <= 0.01 && line v.y > -0.1) {
+        line vy = 0.42;
+    }
+    select entitiesByName(id);
+    selectedEntity.setVelocity(vec(line want.x, line vy, line want.z));
+    select reset;
+}
+
+/** Enemy id starts winding up an attack: it flashes and growls. */
+function enemyWindup(id: str, d: list) {
+    global eState[id] = "wind";
+    global eT[id] = d[12] as num;
+    line c = enemyCenter(id);
+    allPlayers.displayParticleEffect(par("Dust", amount=10, spreadHoriz=0.5, spreadVert=0.6, color="#FF2020", size=1.4), loc(c.x, c.y, c.z));
+    allPlayers.playSound(snd("Evoker Prepare Attack", 0.4, 1.6), loc(c.x, c.y, c.z));
+    select entitiesByName(id);
+    selectedEntity.setArmsRaised(armsRaised="Enable");
+    select reset;
+}
+
+/** Enemy id's attack lands (or flies) at target player tgt. */
+function enemyStrike(id: str, tgt: str, pos: vec, tp: vec) {
+    line d = monData(global eType[id]);
+    line lvl = global eLvl[id];
+    line dmg = (d[4] as num) * (1 + (lvl - 1) * 0.22);
+    select entitiesByName(id);
+    selectedEntity.setArmsRaised(armsRaised="Disable");
+    select reset;
+    line kind = d[7] as str;
+    line c = enemyCenter(id);
+    if (kind == "melee") {
+        line toV = vec(tp.x - pos.x, 0, tp.z - pos.z);
+        // Lunge a little, then hit if the target is still in reach.
+        select entitiesByName(id);
+        selectedEntity.setVelocity(line toV.setLength(0.35) + vec(0, 0.15, 0));
+        select reset;
+        if (line toV.len() <= (d[6] as num) + 0.9) {
+            playerHurt(tgt, line dmg, pos, d[14] as str);
+            if (d[14] == "poison") {
+                global pPoison[tgt] = now() + 80;
+            }
+        }
+        allPlayers.displayParticleEffect(par("Sweep Attack"), loc(c.x, c.y, c.z));
+    } else {
+        line aim = tp + vec(0, 1.1, 0);
+        line dir = (line aim - c).setLength(1);
+        if (kind == "caster") {
+            projSpawn("enemy", c + line dir * 0.6, line dir * 0.75, "bolt", {dmg: line dmg, grav: 0, radius: 0.5, model: "rpg:fx/orb", color: 0xFF7A2A, life: 50, elem: "fire", homing: 0.4, scale: 0.6});
+        } else {
+            projSpawn("enemy", c + line dir * 0.6, line dir * 1.6 + vec(0, 0.06, 0), "arrow", {dmg: line dmg, grav: 0.02, radius: 0.35, model: "rpg:fx/arrow", color: 0xFFFFFF, life: 50, elem: "phys"});
+        }
+        allPlayers.playSound(snd("Arrow Shoot", 0.6, 0.9), loc(c.x, c.y, c.z));
+    }
+}
+
+/** Per player: poisoned until tick. */
+declare global pPoison: dict[num];
+
+/** Spawns monsters around players (every 40 ticks) and despawns far ones. */
+function spawnerTick {
+    if (global wPlanned == 0) {
+        return;
+    }
+    // Despawn monsters no player is near.
+    line gone: list[str] = [];
+    for (line id of global eList) {
+        line p = global ePos[line id];
+        line near = 0;
+        for (line uuid, line b of global pBody) {
+            if ((bodyFeet(line uuid) - line p).len() < 90) {
+                line near = 1;
+            }
+        }
+        if (line near == 0) {
+            line gone.append(line id);
+        }
+    }
+    for (line id of line gone) {
+        enemyRemove(line id);
+    }
+    if (global eList.len() >= 40) {
+        return;
+    }
+    for (line uuid, line b of global pBody) {
+        line f = bodyFeet(line uuid);
+        line count = enemiesNear(line f, 40).len();
+        if (line count < 5) {
+            line a = num.randomd(0, 360);
+            line r = num.randomd(26, 40);
+            line x = num.round(f.x + num.cos(line a) * line r);
+            line z = num.round(f.z + num.sin(line a) * line r);
+            if (x > 8 && z > 8 && x < global wS - 8 && z < global wS - 8) {
+                line dc = num.root((x - global wCx) ** 2 + (z - global wCz) ** 2);
+                if (line dc > global wR + 25 && onRoad(x, z, 3) == 0 && inBuilding(x, z, 3) == 0) {
+                    line y = groundY(x, z);
+                    if (line y >= waterY()) {
+                        line zone = zoneAt(x, z);
+                        line opts = zoneMobs(line zone);
+                        line pack = 1 + num.floor(num.randomd(0, 2.99));
+                        repeat (line pack) {
+                            line o = line opts[1 + num.floor(num.randomd(0, line opts.len() - 0.01))] as list;
+                            line lvl = num.round(num.randomd(line o[2] as num, line o[3] as num));
+                            spawnMonster(line o[1] as str, line lvl, vec(x + num.randomd(-2, 2), line y + 1, z + num.randomd(-2, 2)), line zone);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    bossTick();
+}
+
+/** Bosses wait in their lairs when a player comes near. */
+function bossTick {
+    line bosses = [["chief", "camp", 10], ["broodmother", "cave", 15], ["cryptlord", "crypt", 20]];
+    for (line bsAny of line bosses) {
+        line bs = line bsAny as list;
+        line t = line bs[1] as str;
+        line where = line bs[2] as str;
+        if (global wPois.hasKeys(line where) && (!saved bossRespawn.hasKeys(line t) || now() >= saved bossRespawn[line t])) {
+            line p = global wPois[line where];
+            line px = line p[1] as num;
+            line pz = line p[2] as num;
+            line py = groundY(num.round(line px), num.round(line pz)) + 1;
+            if (line where == "crypt") {
+                line py = (line p[4] as num);
+            }
+            line alive = 0;
+            for (line id of global eList) {
+                if (global eType[line id] == line t) {
+                    line alive = 1;
+                }
+            }
+            if (line alive == 0) {
+                for (line uuid, line b of global pBody) {
+                    if ((bodyFeet(line uuid) - vec(line px, line py, line pz)).len() < 45) {
+                        spawnMonster(line t, line bs[3] as num, vec(line px, line py, line pz), line where);
+                        select playersByName(line uuid);
+                        selected.sendTitle(s" ", s"<red>Something stirs nearby...", 5, 40, 10);
+                        select reset;
+                    }
+                }
+            }
+        }
+    }
+}
+
+function mobCommand(words: list) {
+    if (words.len() < 2) {
+        default.sendMessage(s"<gray>@mob TYPE [LVL] | @mob clear");
+        return;
+    }
+    if (words[2] == "clear") {
+        for (line id of global eList) {
+            select entitiesByName([line id, global eBar[line id]]);
+            selectedEntity.remove();
+            select reset;
+        }
+        global eList = [];
+        return;
+    }
+    line f = bodyFeet(default.uuid) + yawFwd(global pYaw[default.uuid]) * 5;
+    spawnMonster(words[2] as str, argNum(words, 3, 1), f + vec(0, 1, 0), "wild");
+}

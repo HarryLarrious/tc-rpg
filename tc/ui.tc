@@ -1,0 +1,551 @@
+// Hotbar, Journal, equipment menu and the Spell Loom.
+//
+// Hotbar: slot 1 shows the main weapon (the selected slot), slots 2-8 are
+// the spell and ability slots of the equipped gear (pressing the number
+// uses it), slot 9 is the Journal. The upper inventory is the bag.
+//
+// One clickDialogButton event routes every dialog's buttons by prefix.
+
+/** Per player: the open custom menu ("" none, "equip", "shop:<id>", ...). */
+declare global pMenu: dict[str];
+
+/** 1 while player uuid has a custom menu open (movement locks). */
+function menuOpen(uuid: str): num {
+    if (global pMenu.hasKeys(uuid) && global pMenu[uuid] != "") {
+        return 1;
+    }
+    return 0;
+}
+
+function menuClose {
+    global pMenu[default.uuid] = "";
+    default.closeInventory();
+}
+
+function menuClick(k: num) {
+}
+
+playerevent closeInventory {
+    global pMenu[default.uuid] = "";
+}
+
+// ---------------------------------------------------------------- slots
+
+/** The hotbar entries 2-8 of player uuid: [kind, equip slot, index]
+ * with kind "magic" or "ability". */
+function slotEntries(uuid: str): list[list] {
+    line out: list[list] = [];
+    for (line kind of ["magic", "ability"]) {
+        for (line es of ["main", "off"]) {
+            if (equipHas(uuid, line es) == 1) {
+                line it = equipOf(uuid, line es);
+                if (it.getTag("slk") == line kind) {
+                    repeat (line i to it.getTag("sl") as num) {
+                        if (line out.len() < 7) {
+                            line out.append([line kind, line es, line i]);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return line out;
+}
+
+/** The phrase or art inscribed in entry e ("" when empty). */
+function slotContent(uuid: str, e: list): str {
+    line it = equipOf(uuid, e[2] as str);
+    line i = e[3] as num;
+    line key = "sp%var(i)";
+    if (e[1] == "ability") {
+        line key = "ab%var(i)";
+    }
+    line v = it.getTag(line key);
+    if (line v == 0) {
+        return "";
+    }
+    return line v as str;
+}
+
+/** Writes s into the slot of entry e. */
+function slotInscribe(uuid: str, e: list, s: str) {
+    line es = e[2] as str;
+    line it = equipOf(uuid, line es);
+    line i = e[3] as num;
+    line key = "sp%var(i)";
+    if (e[1] == "ability") {
+        line key = "ab%var(i)";
+    }
+    line eq = pdGet(uuid, "equip") as dict;
+    line eq[line es] = it.setTag(line key, s);
+    pdSet(uuid, "equip", line eq);
+}
+
+/** Puts the hotbar items in place for player uuid (default). */
+function hotbarRefresh(uuid: str) {
+    select playersByName(uuid);
+    if (equipHas(uuid, "main") == 1) {
+        selected.setItemInSlot(equipOf(uuid, "main"), 1);
+    } else {
+        selected.setItemInSlot(item("paper").setModel("rpg:empty").setName(s"<!i><gray>Bare fists").setLore([s"<dark_gray>Equip a weapon in the Journal (slot 9)."]), 1);
+    }
+    line entries = slotEntries(uuid);
+    repeat (line k to 7) {
+        line slot = line k + 1;
+        if (line k <= line entries.len()) {
+            line e = line entries[line k];
+            line c = slotContent(uuid, line e);
+            selected.setItemInSlot(slotIcon(uuid, line e, line c, line slot), line slot);
+        } else {
+            selected.setItemInSlot(item("air"), line slot);
+        }
+    }
+    selected.setItemInSlot(item("book").setName(s"<!i><gold><b>Journal</b>").setLore([s"<gray>Press 9 (or select it) to open."]), 9);
+    selected.setHotbarSlot(1);
+    select reset;
+}
+
+/** The hotbar icon of a spell or ability slot. */
+function slotIcon(uuid: str, e: list, c: str, slot: num): item {
+    if (e[1] == "magic") {
+        if (c == "") {
+            return item("paper").setModel("minecraft:glass_bottle").setName(s"<!i><dark_gray>Empty spell slot").setLore([s"<gray>Inscribe a phrase at the Spell Loom", s"<gray>(Journal, slot 9)."]);
+        }
+        line sp = spellCompile(uuid, c, 0);
+        if (line sp.hasKeys("err")) {
+            return item("paper").setModel("minecraft:barrier").setName(s"<!i><red>%var(c)");
+        }
+        line name = line sp["name"] as str;
+        line info = spellInfo(line sp);
+        return fxItem("rpg:icon/spell", line sp["color"] as num).setName(s"<!i><#E080FF>%var(name) <dark_gray>[%var(slot)]").setLore([s"<!i><white><i>%var(c)", s"<gray>%var(info)"]);
+    }
+    if (c == "") {
+        return item("paper").setModel("minecraft:iron_nugget").setName(s"<!i><dark_gray>Empty art slot").setLore([s"<gray>Learn weapon arts at the Adventurers' Guild."]);
+    }
+    line ad = artData(c);
+    line name = line ad[1] as str;
+    line desc = line ad[5] as str;
+    line cost = line ad[2];
+    return item("paper").setModel(line ad[6] as str).setName(s"<!i><#FFC83C>%var(name) <dark_gray>[%var(slot)]").setLore([s"<gray>%var(desc)", s"<#E8C547>Stamina %var(cost)"]);
+}
+
+playerevent changeSlot {
+    line uuid = default.uuid;
+    if (hasBody(line uuid) == 0) {
+        return;
+    }
+    line n = event.hotbarSlot;
+    if (line n == 1) {
+        return;
+    }
+    event.cancel();
+    if (line n == 9) {
+        journalOpen();
+        return;
+    }
+    line entries = slotEntries(line uuid);
+    if (line n - 1 > line entries.len()) {
+        return;
+    }
+    line e = line entries[line n - 1];
+    line c = slotContent(line uuid, line e);
+    if (line c == "") {
+        sendBar(line uuid, "<gray>That slot is empty.");
+        return;
+    }
+    if (line e[1] == "magic") {
+        castStart(line uuid, spellCompile(line uuid, line c, 0), 1);
+    } else {
+        artUse(line uuid, line c);
+    }
+}
+
+playerevent clickInventorySlot {
+    // Hotbar icons stay where they are.
+    if (hasBody(default.uuid) == 1 && event.clickedSlotIndex <= 9) {
+        event.cancel();
+    }
+}
+
+// ---------------------------------------------------------------- journal
+
+/** The Journal: a dialog with the character's summary and pages. */
+function journalOpen {
+    line uuid = default.uuid;
+    line r = pdOf(line uuid);
+    line app = line r["app"] as dict;
+    line race = raceName(line app["race"] as str);
+    line lvl = line r["lvl"];
+    line xp = line r["xp"];
+    line need = xpNeed(line r["lvl"] as num);
+    line gold = line r["gold"];
+    line pts = line r["pts"];
+    line rank = guildRankName(line r["rank"] as num);
+    line d = dialog.create("journal", s"<gold><b>Journal</b>", type="Multi Action with Exit Button");
+    dialog.addBodyText(line d, s"<white>%var(race) <gray>| Level <yellow>%var(lvl)</yellow> <gray>(%var(xp)/%var(need) XP) | <gold>%var(gold) gold</gold> | Guild rank <aqua>%var(rank)");
+    if ((line pts as num) > 0) {
+        dialog.addBodyText(line d, s"<#9BE27A>You have %var(pts) unspent stat points.");
+    }
+    dialog.setColumnCount(line d, 2);
+    dialog.addButton(line d, s"<yellow>Character", s"Stats and stat points", "j_char", 150);
+    dialog.addButton(line d, s"<yellow>Equipment & Bag", s"Equip gear, read scrolls", "j_equip", 150);
+    dialog.addButton(line d, s"<#E080FF>Spell Loom", s"Inscribe phrases into your focus", "j_loom", 150);
+    dialog.addButton(line d, s"<#E080FF>Words of Power", s"The words you know", "j_words", 150);
+    dialog.addButton(line d, s"<#FFC83C>Weapon Arts", s"Set arts into ability slots", "j_arts", 150);
+    dialog.addButton(line d, s"<aqua>Quests", s"Your contracts", "j_quests", 150);
+    dialog.addButton(line d, s"<gray>Camera", s"Camera distance", "j_cam", 150);
+    dialog.addButton(line d, s"<gray>Appearance", s"The mirror (costs 50 gold after the first time)", "j_design", 150);
+    default.openDialog(line d);
+}
+
+/** Character sheet: stats with buttons to spend points. */
+function charSheet {
+    line uuid = default.uuid;
+    statsRecalc(line uuid);
+    line r = pdOf(line uuid);
+    line base = line r["base"] as list[num];
+    line pts = line r["pts"];
+    line d = dialog.create("char", s"<gold><b>Character</b>", type="Multi Action with Exit Button");
+    line names = ["STR", "DEX", "INT", "VIT", "AGI"];
+    line keys = ["str", "dex", "int", "vit", "agi"];
+    line descs = ["Heavy and blunt weapons", "Light, piercing and ranged weapons, critical hits", "Spell power, mana, magic efficiency", "Health and its regeneration", "Stamina, speed, attack speed"];
+    dialog.addBodyText(line d, s"<gray>Unspent points: <yellow>%var(pts)");
+    repeat (line i to 5) {
+        line n = line names[line i];
+        line tot = stat(line uuid, line keys[line i] as str);
+        line b = line base[line i];
+        line ds = line descs[line i];
+        dialog.addBodyText(line d, s"<white><b>%var(n)</b> %var(tot) <dark_gray>(base %var(b)) <gray>%var(ds)");
+    }
+    line hp = stat(line uuid, "maxHp");
+    line mp = stat(line uuid, "maxMana");
+    line sta = stat(line uuid, "maxSta");
+    line arm = num.round(stat(line uuid, "armor") * 10) / 10;
+    line eff = num.round(stat(line uuid, "eff") * 100);
+    line crit = num.round(stat(line uuid, "crit") * 100);
+    dialog.addBodyText(line d, s"<#E0413A>HP %var(hp) <#4AA3FF>Mana %var(mp) <#E8C547>Stamina %var(sta) <gray>Armor %var(arm) | Magic efficiency %var(eff)% | Crit %var(crit)%");
+    if ((line pts as num) > 0) {
+        dialog.setColumnCount(line d, 5);
+        repeat (line i to 5) {
+            line n = line names[line i];
+            dialog.addButton(line d, s"<green>+ %var(n)", s"Spend a point", "c_add_%var(i)", 60);
+        }
+    }
+    dialog.addButton(line d, s"Back", s"Journal", "j_back", 100);
+    default.openDialog(line d);
+}
+
+/** The words the player knows, by class. */
+function wordsPage {
+    line uuid = default.uuid;
+    line known = pdGet(line uuid, "words") as list[str];
+    line d = dialog.create("words", s"<#E080FF><b>Words of Power", type="Multi Action with Exit Button");
+    dialog.addBodyText(line d, s"<gray>Combine words into a phrase. Elements set the kind of magic, forms how it travels, verbs what it does, and modifiers shape it. Each word costs mana.");
+    for (line cls of ["elem", "form", "verb", "mod"]) {
+        line title = {elem: "Elements", form: "Forms", verb: "Verbs", mod: "Modifiers"}[line cls] as str;
+        line s = "";
+        for (line w of line known) {
+            line wd = wordData(line w);
+            if (line wd[1] == line cls) {
+                line g = line wd[2] as str;
+                line s = "%var(s) %var(w) (%var(g)) ";
+            }
+        }
+        if (line s == "") {
+            line s = " none yet";
+        }
+        dialog.addBodyText(line d, s"<#E080FF>%var(title):<white>%var(s)");
+    }
+    line n = line known.len();
+    line all = allWords().len();
+    dialog.addBodyText(line d, s"<gray>You know %var(n) of %var(all) words. Libraries teach more; rare scrolls drop from monsters.");
+    dialog.addButton(line d, s"Back", s"Journal", "j_back", 100);
+    default.openDialog(line d);
+}
+
+/** The Spell Loom: type a phrase, preview it, inscribe it into a slot. */
+function loomOpen(phrase: str, msg: str) {
+    line uuid = default.uuid;
+    line entries = slotEntries(uuid);
+    line d = dialog.create("loom", s"<#E080FF><b>Spell Loom", type="Multi Action with Exit Button");
+    line nMagic = 0;
+    for (line e of line entries) {
+        if (line e[1] == "magic") {
+            line nMagic += 1;
+        }
+    }
+    if (line nMagic == 0) {
+        dialog.addBodyText(line d, s"<red>You need a wand or staff with spell slots. Wands hold one slot per rarity (up to six); staves add slots too.");
+    }
+    if (msg != "") {
+        dialog.addBodyText(line d, s"%var(msg)");
+    }
+    if (phrase != "") {
+        line sp = spellCompile(uuid, phrase, 1);
+        if (line sp.hasKeys("err")) {
+            line err = line sp["err"] as str;
+            dialog.addBodyText(line d, s"<red>%var(err)");
+        } else {
+            line name = line sp["name"] as str;
+            line info = spellInfo(line sp);
+            dialog.addBodyText(line d, s"<#E080FF><b>%var(name)</b>\n<gray>%var(info)");
+        }
+    }
+    dialog.addTextInput(line d, "phrase", s"Phrase (e.g. ignis sagitta celer)", phrase, 300, 80);
+    dialog.addButton(line d, s"<yellow>Preview", s"See what the phrase does", "l_prev", 100);
+    line k = 0;
+    for (line e of line entries) {
+        line k += 1;
+        if (line e[1] == "magic") {
+            line c = slotContent(uuid, line e);
+            if (line c == "") {
+                line c = "empty";
+            }
+            line hb = line k + 1;
+            dialog.addButton(line d, s"<#E080FF>Slot %var(hb)", s"Now: %var(c)", "l_ins_%var(k)", 100);
+        }
+    }
+    dialog.addButton(line d, s"Back", s"Journal", "j_back", 100);
+    default.openDialog(line d);
+}
+
+/** Weapon arts page: the arts known and the ability slots. */
+function artsPage(msg: str) {
+    line uuid = default.uuid;
+    line arts = pdArts(uuid);
+    line entries = slotEntries(uuid);
+    line d = dialog.create("arts", s"<#FFC83C><b>Weapon Arts", type="Multi Action with Exit Button");
+    if (msg != "") {
+        dialog.addBodyText(line d, s"%var(msg)");
+    }
+    line slots = 0;
+    for (line e of line entries) {
+        if (line e[1] == "ability") {
+            line slots += 1;
+        }
+    }
+    dialog.addBodyText(line d, s"<gray>Ability slots come from daggers, gauntlets and Rare or better weapons. You have %var(slots). Pick an art to put it in the first free slot (or replace the last).");
+    for (line a of line arts) {
+        line ad = artData(line a);
+        line n = line ad[1] as str;
+        line ds = line ad[5] as str;
+        dialog.addButton(line d, s"<#FFC83C>%var(n)", s"%var(ds)", "a_set_%var(a)", 150);
+    }
+    if (line arts.len() == 0) {
+        dialog.addBodyText(line d, s"<gray>You know no arts yet. The Adventurers' Guild trainer teaches them.");
+    }
+    dialog.addButton(line d, s"Clear slots", s"Empty all art slots", "a_clear", 100);
+    dialog.addButton(line d, s"Back", s"Journal", "j_back", 100);
+    default.openDialog(line d);
+}
+
+/** Puts art a into a free ability slot (or the last one). */
+function artSet(uuid: str, a: str) {
+    line entries = slotEntries(uuid);
+    line last: list = [];
+    for (line e of line entries) {
+        if (line e[1] == "ability") {
+            if (slotContent(uuid, line e) == "") {
+                slotInscribe(uuid, line e, a);
+                hotbarRefresh(uuid);
+                return;
+            }
+            line last = line e;
+        }
+    }
+    if (line last.len() > 0) {
+        slotInscribe(uuid, line last, a);
+        hotbarRefresh(uuid);
+    }
+}
+
+/** Camera page. */
+function camPage {
+    line d = dialog.create("cam", s"<gray><b>Camera", type="Multi Action with Exit Button");
+    dialog.addNumberInput(line d, "dist", s"Distance", 1.5, 8, global pCamDist[default.uuid], 0.5, 200);
+    dialog.addButton(line d, s"<green>Apply", s"Set the camera distance", "cam_set", 100);
+    dialog.addButton(line d, s"Back", s"Journal", "j_back", 100);
+    default.openDialog(line d);
+}
+
+playerevent clickDialogButton {
+    line id: str = event.clickedButtonId;
+    line uuid = default.uuid;
+    if (line id == "j_back") {
+        journalOpen();
+    } else if (line id == "j_char") {
+        charSheet();
+    } else if (line id == "j_equip") {
+        equipMenu();
+    } else if (line id == "j_loom") {
+        loomOpen("", "");
+    } else if (line id == "j_words") {
+        wordsPage();
+    } else if (line id == "j_arts") {
+        artsPage("");
+    } else if (line id == "j_quests") {
+        questsPage();
+    } else if (line id == "j_cam") {
+        camPage();
+    } else if (line id == "j_design") {
+        designerOpen();
+    } else if (line id == "cam_set") {
+        global pCamDist[line uuid] = game.getDialogNumber("dist");
+    } else if (line id.startsWith("c_add_")) {
+        line i = num.parse(line id.replace("c_add_", ""));
+        line r = pdOf(line uuid);
+        if ((line r["pts"] as num) > 0) {
+            line b = line r["base"] as list[num];
+            line b[line i] = (line b[line i] as num) + 1;
+            line r["base"] = line b;
+            line r["pts"] = (line r["pts"] as num) - 1;
+            saved pd[line uuid] = line r;
+            statsRecalc(line uuid);
+        }
+        charSheet();
+    } else if (line id == "l_prev") {
+        loomOpen(game.getDialogText("phrase"), "");
+    } else if (line id.startsWith("l_ins_")) {
+        line k = num.parse(line id.replace("l_ins_", ""));
+        line phrase: str = game.getDialogText("phrase").setCase(case="lowercase");
+        line sp = spellCompile(line uuid, line phrase, 1);
+        if (line sp.hasKeys("err")) {
+            line err = line sp["err"] as str;
+            loomOpen(line phrase, "<red>%var(err)");
+            return;
+        }
+        slotInscribe(line uuid, slotEntries(line uuid)[line k], line phrase);
+        hotbarRefresh(line uuid);
+        line name = line sp["name"] as str;
+        default.playSound(snd("Enchantment Table Use", 1, 1));
+        loomOpen(line phrase, "<green>Inscribed <#E080FF>%var(name)</#E080FF> into slot %math(%var(k)+1).");
+    } else if (line id.startsWith("a_set_")) {
+        artSet(line uuid, line id.replace("a_set_", ""));
+        artsPage("<green>Set.");
+    } else if (line id == "a_clear") {
+        for (line e of slotEntries(line uuid)) {
+            if (line e[1] == "ability") {
+                slotInscribe(line uuid, line e, "");
+            }
+        }
+        hotbarRefresh(line uuid);
+        artsPage("<gray>Cleared.");
+    } else {
+        dialogRoute(line id);
+    }
+}
+
+// ---------------------------------------------------------------- equipment menu
+
+/** The equipment menu: equipped gear on top, the bag below. Clicking gear
+ * takes it off; clicking a bag item equips, reads or uses it. */
+function equipMenu {
+    line uuid = default.uuid;
+    line items: list[item] = [];
+    line labels = ["Main hand", "Off hand", "Head", "Body", "Arms", "Legs"];
+    repeat (line i to 6) {
+        line sl = equipSlots()[line i] as str;
+        if (equipHas(line uuid, line sl) == 1) {
+            line items.append(equipOf(line uuid, line sl));
+        } else {
+            line lb = line labels[line i];
+            line items.append(item("light_gray_stained_glass_pane").setName(s"<!i><gray>%var(lb): empty"));
+        }
+    }
+    line items.append(item("black_stained_glass_pane").setName(s" "));
+    line gold = pdGet(line uuid, "gold");
+    line items.append(item("gold_nugget").setName(s"<!i><gold>%var(gold) gold"));
+    line items.append(item("book").setName(s"<!i><yellow>Character").setLore([s"<gray>Click for your stats."]));
+    // The bag: the upper inventory, slots 10-36.
+    line inv = default.upperInventoryItems;
+    for (line it of line inv) {
+        line items.append(line it as item);
+    }
+    global pMenu[line uuid] = "equip";
+    default.showInventoryMenu(line items);
+    default.setInventoryMenuName(s"Equipment & Bag");
+}
+
+playerevent clickMenuSlot {
+    line uuid = default.uuid;
+    event.cancel();
+    line m = global pMenu[line uuid];
+    line idx = event.clickedSlotIndex;
+    if (line m == "equip") {
+        equipMenuClick(line uuid, line idx);
+    } else if (line m.startsWith("shop:")) {
+        shopClick(line uuid, line m.replace("shop:", ""), line idx);
+    }
+}
+
+/** A click in the equipment menu at slot idx. */
+function equipMenuClick(uuid: str, idx: num) {
+    if (idx >= 1 && idx <= 6) {
+        line sl = equipSlots()[idx] as str;
+        if (equipHas(uuid, line sl) == 1) {
+            default.giveItems(equipOf(uuid, line sl));
+            equipSet(uuid, line sl, item("air"));
+            hotbarRefresh(uuid);
+        }
+    } else if (idx == 9) {
+        charSheet();
+        return;
+    } else if (idx >= 10 && idx <= 36) {
+        // Bag slot idx is inventory slot idx.
+        line inv = default.upperInventoryItems;
+        line it = line inv[idx - 9] as item;
+        line k = it.getTag("k");
+        if (line k == "weapon" || line k == "armor") {
+            line req = it.getTag("lvl") as num;
+            if (req > (pdGet(uuid, "lvl") as num)) {
+                sendBar(uuid, "<red>You need level %var(req) for that.");
+                default.playSound(snd("Villager No", 1, 1));
+            } else {
+                line sl = it.getTag("t") as str;
+                if (line k == "weapon") {
+                    line sl = "main";
+                    if (it.getTag("t") == "shield" || (it.getTag("t") == "wand" && equipHas(uuid, "main") == 1 && wtData(mainType(uuid))[8] == 1)) {
+                        line sl = "off";
+                    }
+                    if ((wtData(it.getTag("t") as str)[8] as num) == 2 && equipHas(uuid, "off") == 1) {
+                        default.giveItems(equipOf(uuid, "off"));
+                        equipSet(uuid, "off", item("air"));
+                    }
+                }
+                default.setItemInSlot(item("air"), idx);
+                if (equipHas(uuid, line sl) == 1) {
+                    default.giveItems(equipOf(uuid, line sl));
+                }
+                equipSet(uuid, line sl, it);
+                hotbarRefresh(uuid);
+                default.playSound(snd("Armor Equip (Chain)", 1, 1));
+            }
+        } else if (line k == "scroll") {
+            if (learnWord(uuid, it.getTag("word") as str) == 1) {
+                default.setItemInSlot(item("air"), idx);
+            } else {
+                sendBar(uuid, "<gray>You already know that word.");
+            }
+        } else if (line k == "potion") {
+            drinkPotion(uuid, it);
+            default.setItemInSlot(it.setStackSize(it.getStackSize() - 1), idx);
+        }
+    }
+    equipMenu();
+}
+
+/** Drinks potion it. */
+function drinkPotion(uuid: str, it: item) {
+    line kind = it.getTag("t") as str;
+    line amt = it.getTag("d") as num;
+    if (kind == "hp") {
+        global pHp[uuid] = num.min(stat(uuid, "maxHp"), global pHp[uuid] + amt);
+    } else if (kind == "mana") {
+        global pMana[uuid] = num.min(stat(uuid, "maxMana"), global pMana[uuid] + amt);
+    } else {
+        global pSta[uuid] = stat(uuid, "maxSta");
+        global pBuff[uuid] = 1.25;
+        global pBuffUntil[uuid] = now() + 600;
+    }
+    default.playSound(snd("Drink", 1, 1));
+}

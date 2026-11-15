@@ -1,0 +1,491 @@
+// Talking to townsfolk and the town's services: shops, the library, the
+// blacksmith, the inn, the chapel, the guild and the lord.
+
+/** Per player: the NPC being talked to, and the shop's goods. */
+declare global pTalk: dict[str];
+declare global pGoods: dict[list];
+declare global pGoodsDay: dict[num];
+
+/** A greeting line for NPC id, from role, time, mood and the player. */
+function greeting(id: str, uuid: str): str {
+    line role = global nRole[id];
+    line h = hourNow();
+    line needs = global nNeeds[id];
+    line rep = pdGet(uuid, "rep") as num;
+    line race = raceName(playerRace(uuid));
+    line pick = wHash(num.floor(now() / 400), num.parse(id.replace("n", "")), 3);
+    line time = "Good day";
+    if (line h < 12) { line time = "Good morning"; }
+    if (line h >= 18) { line time = "Good evening"; }
+    if (line h >= 22 || line h < 5) { line time = "It's late"; }
+    line mood = "";
+    if ((line needs[1] as num) < 0.25) {
+        line mood = " *yawns*";
+    } else if ((line needs[2] as num) > 0.75) {
+        line mood = " I could eat a whole boar.";
+    }
+    line who = "traveller";
+    if (line rep >= 30) { line who = "friend"; }
+    if (line rep >= 100) { line who = "hero"; }
+    if (role == "lord") {
+        return "%var(time), %var(who). Valenmoor stands, but the wilds press closer each night.";
+    }
+    if (role == "smith") {
+        return ["%var(time). Steel needs mending? Bring it here.", "Hot work today. What'll it be, %var(who)?", "A %var(race), eh? I've a blade that'd suit you."][1 + line pick % 3] + line mood;
+    }
+    if (role == "armorer") {
+        return ["Armor saves lives. Mine saves more.", "%var(time), %var(who). Looking for something sturdier?", "That's a dent I'd rather not see on you again."][1 + line pick % 3] + line mood;
+    }
+    if (role == "librarian") {
+        return ["Words are older than swords, and sharper.", "Quiet, please. Ah, a seeker of words?", "Every phrase of power is just words, arranged with intent."][1 + line pick % 3];
+    }
+    if (role == "archmage") {
+        return "Magic is grammar, %var(who). Learn the words and the world listens.";
+    }
+    if (role == "innkeeper") {
+        return ["%var(time)! A warm bed and a hot meal, ten gold.", "Welcome to the Gilded Stag, %var(who)."][1 + line pick % 2] + line mood;
+    }
+    if (role == "barkeep" || role == "bard") {
+        return ["Pull up a stool. I hear things, you know.", "Ale's cold, gossip's warm.", "Sing you a song of the Crypt Lord? No? Suit yourself."][1 + line pick % 3];
+    }
+    if (role == "priest") {
+        return "The Dawn watches over you, %var(who). Let me tend your wounds.";
+    }
+    if (role == "guildmaster") {
+        return "Contracts on the board, coin in the chest. Pick your work.";
+    }
+    if (role == "trainer") {
+        return "Your footwork's sloppy. Want me to teach you something useful?";
+    }
+    if (role == "guard" || role == "captain") {
+        return ["Move along. Or don't, but keep your blade sheathed in town.", "Wolves at the west road again. Watch yourself.", "%var(time), %var(who)."][1 + line pick % 3];
+    }
+    if (role == "merchant" || role == "alchemist" || role == "baker") {
+        return ["%var(time)! Fresh stock, fair prices.", "Potions, provisions, whatever you need."][1 + line pick % 2] + line mood;
+    }
+    if (role == "child") {
+        return ["Are you a real adventurer?! Can I hold your sword?", "Mum says not to go past the farms."][1 + line pick % 2];
+    }
+    return ["%var(time), %var(who).", "Fine weather, isn't it?", "Have you heard? Bandits on the north road.", "Don't wander into the old ruins. Folk say the dead walk there."][1 + line pick % 4] + line mood;
+}
+
+/** A rumor that points at a place worth visiting. */
+function rumor(h: num): str {
+    line r = [
+        "Bandits have dug in at a camp in the wilds. Their chief, Varro, has a price on his head.",
+        "There's a cave in the hills crawling with spiders. Something big lives deep inside.",
+        "Old ruins stand beyond the river. Under them is a crypt, and the Crypt Lord does not sleep.",
+        "Druids once tended a grove in the dark woods. The wolves there are bigger than horses now.",
+        "The lake has a dock. Fishermen say the water glows on moonless nights.",
+        "The library sells words of power. Speak a phrase while holding a wand and see what happens!",
+        "The blacksmith can raise a weapon's rarity. A finer wand holds more spells."
+    ];
+    return line r[1 + h % line r.len()] as str;
+}
+
+/** Opens the conversation with NPC id. */
+function talkTo(id: str) {
+    line uuid = default.uuid;
+    global pTalk[uuid] = id;
+    line name = global nName[id];
+    line role = global nRole[id];
+    line title = roleTitle(role);
+    line g = greeting(id, uuid);
+    line d = dialog.create("talk", s"<gold>%var(name) <gray>- %var(title)", type="Multi Action with Exit Button");
+    dialog.addBodyText(line d, s"<white>\"%var(g)\"");
+    dialog.setColumnCount(line d, 2);
+    if (role == "armorer") {
+        dialog.addButton(line d, s"<yellow>Trade", s"Buy and sell armor", "t_shop_armor", 150);
+    } else if (role == "smith") {
+        dialog.addButton(line d, s"<yellow>Trade", s"Buy and sell weapons", "t_shop_weapons", 150);
+        dialog.addButton(line d, s"<yellow>Repair gear", s"Mend all your equipment", "t_repair", 150);
+        dialog.addButton(line d, s"<#B05CFF>Improve weapon", s"Raise your main weapon's rarity", "t_upgrade_main", 150);
+        dialog.addButton(line d, s"<#B05CFF>Improve focus", s"Raise your off-hand item's rarity", "t_upgrade_off", 150);
+    } else if (role == "librarian") {
+        dialog.addButton(line d, s"<#E080FF>Learn words", s"Buy words of power", "t_words", 150);
+    } else if (role == "archmage") {
+        dialog.addButton(line d, s"<#E080FF>Buy a focus", s"Wands and staves", "t_shop_focus", 150);
+        dialog.addButton(line d, s"<#E080FF>Learn words", s"Buy words of power", "t_words", 150);
+    } else if (role == "merchant" || role == "alchemist" || role == "baker") {
+        dialog.addButton(line d, s"<yellow>Trade", s"Potions and provisions", "t_shop_potions", 150);
+    } else if (role == "innkeeper") {
+        dialog.addButton(line d, s"<yellow>Rest (10 gold)", s"Restore health, mana and stamina", "t_rest", 150);
+    } else if (role == "priest") {
+        dialog.addButton(line d, s"<yellow>Blessing", s"Healing and cures, free of charge", "t_bless", 150);
+    } else if (role == "guildmaster") {
+        dialog.addButton(line d, s"<aqua>Contracts", s"The guild's job board", "t_board", 150);
+        dialog.addButton(line d, s"<aqua>Report", s"Hand in finished contracts", "t_report", 150);
+    } else if (role == "trainer") {
+        dialog.addButton(line d, s"<#FFC83C>Learn arts", s"Weapon arts", "t_arts", 150);
+    } else if (role == "lord") {
+        dialog.addButton(line d, s"<gold>Audience", s"Speak of the realm's troubles", "t_lord", 150);
+    }
+    dialog.addButton(line d, s"<gray>Any rumors?", s"Ask what's going on", "t_rumor", 150);
+    dialog.addButton(line d, s"<gray>Farewell", s"End the conversation", "t_bye", 150);
+    default.openDialog(line d);
+    pdSet(uuid, "rep", (pdGet(uuid, "rep") as num) + 0);
+}
+
+/** Buttons of town dialogs. */
+function dialogRoute(id: str) {
+    line uuid = default.uuid;
+    if (id == "t_bye") {
+        return;
+    }
+    if (id == "t_rumor") {
+        line r = rumor(wHash(now(), num.floor(now() / 7), 1));
+        default.sendMessage(s"<gray>\"%var(r)\"");
+    } else if (id.startsWith("t_shop_")) {
+        shopOpen(id.replace("t_shop_", ""));
+    } else if (id == "t_repair") {
+        smithRepair(uuid);
+    } else if (id.startsWith("t_upgrade_")) {
+        smithUpgrade(uuid, id.replace("t_upgrade_", ""));
+    } else if (id == "t_words") {
+        libraryPage("");
+    } else if (id.startsWith("w_buy_")) {
+        libraryBuy(uuid, id.replace("w_buy_", ""));
+    } else if (id == "t_rest") {
+        if ((pdGet(uuid, "gold") as num) >= 10) {
+            giveGold(uuid, -10);
+            global pHp[uuid] = stat(uuid, "maxHp");
+            global pMana[uuid] = stat(uuid, "maxMana");
+            global pSta[uuid] = stat(uuid, "maxSta");
+            default.sendTitle(s" ", s"<gray>You rest and wake refreshed.", 10, 30, 15);
+            default.playSound(snd("Villager Celebrate", 1, 1));
+        } else {
+            sendBar(uuid, "<red>You can't afford a room.");
+        }
+    } else if (id == "t_bless") {
+        global pHp[uuid] = stat(uuid, "maxHp");
+        global pPoison[uuid] = 0;
+        fxBurst(bodyFeet(uuid) + vec(0, 1, 0), "light", 1);
+        default.sendMessage(s"<#FFFBD0>Warm light washes over you.");
+    } else if (id == "t_board") {
+        boardPage();
+    } else if (id.startsWith("q_take_")) {
+        questTake(uuid, num.parse(id.replace("q_take_", "")));
+    } else if (id == "t_report") {
+        questReport(uuid);
+    } else if (id == "t_arts") {
+        trainerPage("");
+    } else if (id.startsWith("ar_buy_")) {
+        trainerBuy(uuid, id.replace("ar_buy_", ""));
+    } else if (id == "t_lord") {
+        lordTalk(uuid);
+    } else if (id == "d_done") {
+        designerFinish();
+    } else if (id.startsWith("d_")) {
+        designerButton(id);
+    }
+}
+
+// ---------------------------------------------------------------- shops
+
+/** Gold value of item it (what a shop pays; it sells for 2.5x). */
+function itemValue(it: item): num {
+    line k = it.getTag("k");
+    if (line k == "weapon" || line k == "armor") {
+        line m = it.getTag("m") as num;
+        line r = it.getTag("r") as num;
+        return num.round(6 * line m ** 1.7 * line r ** 1.6);
+    }
+    if (line k == "potion" || line k == "scroll") {
+        return 10;
+    }
+    return 1;
+}
+
+/** A potion of kind (hp, mana, sta) and size (1 small, 2 large). */
+function makePotion(kind: str, size: num): item {
+    line names = {hp: "Healing Draught", mana: "Mana Tonic", sta: "Warrior's Brew"};
+    line cols = {hp: "#E0413A", mana: "#4AA3FF", sta: "#E8C547"};
+    line n = line names[kind] as str;
+    line c = line cols[kind] as str;
+    line amt = 60 * size;
+    if (kind == "mana") { line amt = 40 * size; }
+    line big = "";
+    if (size == 2) { line big = "Greater "; }
+    return item("paper").setModel("minecraft:honey_bottle").setName(s"<!i><%var(c)>%var(big)%var(n)").setLore([s"<gray>Click it in your bag to drink."]).setTag("k", "potion").setTag("t", kind).setTag("d", line amt).setMaxStackSize(16);
+}
+
+/** Goods of shop kind for player uuid (changes each in-game day). */
+function shopGoods(uuid: str, kind: str): list[item] {
+    line out: list[item] = [];
+    line lvl = pdGet(uuid, "lvl") as num;
+    line day = num.floor(global tick / 24000);
+    line tier = num.clamp(num.floor(lvl / 5) + 1, 1, 9);
+    if (kind == "potions") {
+        for (line k of ["hp", "mana", "sta"]) {
+            line out.append(makePotion(line k as str, 1));
+            line out.append(makePotion(line k as str, 2));
+        }
+        return line out;
+    }
+    repeat (line i to 18) {
+        line seed = day * 1000 + line i * 37 + wHash(lvl, line i, 5);
+        line m = num.clamp(line tier + (seed % 3) - 1, 1, 9);
+        line r = 1 + num.floor((wHash(seed, 1, 2) % 100) / 30);
+        if (kind == "armor") {
+            line sets = ["leather", "chain", "scale", "plate", "robe", "ranger", "noble", "bone"];
+            line slots = ["head", "torso", "arm", "leg"];
+            line out.append(makeArmor(line slots[1 + seed % 4] as str, line sets[1 + num.floor(seed / 4) % 8] as str, line m, line r, seed));
+        } else if (kind == "focus") {
+            line t = ["wand", "staff"][1 + seed % 2] as str;
+            line out.append(makeWeapon(line t, line m, num.clamp(line r + 1, 1, 5), seed));
+        } else {
+            line types = weaponTypes();
+            line out.append(makeWeapon(line types[1 + seed % line types.len()] as str, line m, line r, seed));
+        }
+    }
+    return line out;
+}
+
+/** Opens shop kind: goods on top (click to buy), your bag below (click to
+ * sell). */
+function shopOpen(kind: str) {
+    line uuid = default.uuid;
+    line key = "%var(uuid) %var(kind)";
+    line day = num.floor(global tick / 24000);
+    if (!global pGoods.hasKeys(line key) || global pGoodsDay[line key] != line day) {
+        global pGoods[line key] = shopGoods(uuid, kind);
+        global pGoodsDay[line key] = line day;
+    }
+    shopShow(kind);
+}
+
+function shopShow(kind: str) {
+    line uuid = default.uuid;
+    line goods = global pGoods["%var(uuid) %var(kind)"] as list[item];
+    line items: list[item] = [];
+    line mul = 2.5;
+    if (kind == "armor" || kind == "weapons") {
+        line mul = 2.5 * raceMul(playerRace(uuid), "smith");
+    }
+    for (line g of line goods) {
+        line price = num.round(itemValue(line g) * line mul);
+        line items.append(line g.addLore(s"<gold>Buy: %var(price) gold"));
+    }
+    while (line items.len() < 27) {
+        line items.append(item("black_stained_glass_pane").setName(s" "));
+    }
+    for (line it of default.upperInventoryItems) {
+        line v = itemValue(line it as item);
+        if ((line it as item).getTag("k") != 0) {
+            line items.append((line it as item).addLore(s"<yellow>Sell: %var(v) gold"));
+        } else {
+            line items.append(line it as item);
+        }
+    }
+    global pMenu[uuid] = "shop:%var(kind)";
+    default.showInventoryMenu(line items);
+    line gold = pdGet(uuid, "gold");
+    default.setInventoryMenuName(s"Shop  |  %var(gold) gold");
+}
+
+/** A click in shop kind at slot idx. */
+function shopClick(uuid: str, kind: str, idx: num) {
+    line goods = global pGoods["%var(uuid) %var(kind)"] as list[item];
+    line mul = 2.5;
+    if (kind == "armor" || kind == "weapons") {
+        line mul = 2.5 * raceMul(playerRace(uuid), "smith");
+    }
+    if (idx >= 1 && idx <= line goods.len()) {
+        line g = line goods[idx];
+        line price = num.round(itemValue(line g) * line mul);
+        if ((pdGet(uuid, "gold") as num) < line price) {
+            sendBar(uuid, "<red>Not enough gold.");
+            default.playSound(snd("Villager No", 1, 1));
+        } else {
+            giveGold(uuid, 0 - line price);
+            default.giveItems(line g);
+            default.playSound(snd("Villager Trading", 1, 1));
+            if (kind != "potions") {
+                line goods.remove(idx);
+                global pGoods["%var(uuid) %var(kind)"] = line goods;
+            }
+        }
+    } else if (idx >= 28 && idx <= 54) {
+        line slot = idx - 18;
+        line inv = default.upperInventoryItems;
+        line it = line inv[idx - 27] as item;
+        if (line it.getTag("k") != 0) {
+            line v = itemValue(line it) * line it.getStackSize();
+            giveGold(uuid, line v);
+            default.setItemInSlot(item("air"), line slot);
+            default.playSound(snd("Experience Orb Pickup", 1, 1.2));
+        }
+    }
+    shopShow(kind);
+}
+
+// ---------------------------------------------------------------- smith
+
+/** Repairs all equipment for gold. */
+function smithRepair(uuid: str) {
+    line eq = pdGet(uuid, "equip") as dict;
+    line cost = 0;
+    for (line k, line v of line eq) {
+        line it = line v as item;
+        if (line it.getTag("k") == "weapon") {
+            line missing = (line it.getTag("dmax") as num) - (line it.getTag("dur") as num);
+            line cost += num.ceil(line missing * (line it.getTag("m") as num) * 0.15);
+        }
+    }
+    line cost = num.round(line cost * raceMul(playerRace(uuid), "smith"));
+    if (line cost == 0) {
+        sendBar(uuid, "<gray>Your gear is in fine shape.");
+        return;
+    }
+    if ((pdGet(uuid, "gold") as num) < line cost) {
+        sendBar(uuid, "<red>Repairs cost %var(cost) gold.");
+        return;
+    }
+    giveGold(uuid, 0 - line cost);
+    for (line k, line v of line eq) {
+        line it = line v as item;
+        if (line it.getTag("k") == "weapon") {
+            line eq[line k] = line it.setTag("dur", line it.getTag("dmax") as num);
+        }
+    }
+    pdSet(uuid, "equip", line eq);
+    default.sendMessage(s"<gray>The smith works the steel. <gold>-%var(cost) gold");
+    default.playSound(snd("Anvil Use", 1, 1));
+}
+
+/** Raises the rarity of the item in equipment slot sl by one. */
+function smithUpgrade(uuid: str, sl: str) {
+    if (equipHas(uuid, sl) == 0) {
+        sendBar(uuid, "<gray>Nothing equipped there.");
+        return;
+    }
+    line it = equipOf(uuid, sl);
+    line r = it.getTag("r") as num;
+    if (r >= 6) {
+        sendBar(uuid, "<gold>It can't be improved further.");
+        return;
+    }
+    line m = it.getTag("m") as num;
+    line cost = num.round(40 * line m ** 1.4 * (r + 1) ** 2.2 * raceMul(playerRace(uuid), "smith"));
+    if ((pdGet(uuid, "gold") as num) < line cost) {
+        sendBar(uuid, "<red>That costs %var(cost) gold.");
+        return;
+    }
+    giveGold(uuid, 0 - line cost);
+    line nw = makeWeapon(it.getTag("t") as str, line m, r + 1, wHash(m, r, now()));
+    // Keep its inscriptions.
+    repeat (line i to 6) {
+        line sp = it.getTag("sp%var(i)");
+        if (line sp != 0) {
+            line nw = line nw.setTag("sp%var(i)", line sp as str);
+        }
+        line ab = it.getTag("ab%var(i)");
+        if (line ab != 0) {
+            line nw = line nw.setTag("ab%var(i)", line ab as str);
+        }
+    }
+    equipSet(uuid, sl, line nw);
+    hotbarRefresh(uuid);
+    line rn = rarData(r + 1)[1] as str;
+    default.sendMessage(s"<#B05CFF>Your gear is now %var(rn)! <gold>-%var(cost) gold");
+    default.playSound(snd("Anvil Use", 1, 0.8));
+    fxBurst(bodyFeet(uuid) + vec(0, 1.2, 0), "arcane", 1);
+}
+
+// ---------------------------------------------------------------- library
+
+/** The library: words for sale (buttons), with their price. */
+function libraryPage(msg: str) {
+    line uuid = default.uuid;
+    line known = pdGet(uuid, "words") as list[str];
+    line int = stat(uuid, "int");
+    line gold = pdGet(uuid, "gold");
+    line d = dialog.create("library", s"<#E080FF><b>Words of Power", type="Multi Action with Exit Button");
+    dialog.addBodyText(line d, s"<gray>Gold: <gold>%var(gold)</gold> | Your INT: <aqua>%math(round(%var(int)))</aqua>. Harder words need more INT.");
+    if (msg != "") {
+        dialog.addBodyText(line d, s"%var(msg)");
+    }
+    dialog.setColumnCount(line d, 3);
+    line shown = 0;
+    for (line w of allWords()) {
+        if (line known.find(line w) == 0 && line shown < 18) {
+            line shown += 1;
+            line wd = wordData(line w);
+            line pr = wordPrice(line w);
+            line g = line wd[2] as str;
+            line cls = line wd[1] as str;
+            line price = line pr[1];
+            line req = line pr[2];
+            if (line int >= line req) {
+                dialog.addButton(line d, s"<#E080FF>%var(w) <gray>%var(price)g", s"%var(cls): %var(g)", "w_buy_%var(w)", 110);
+            } else {
+                dialog.addButton(line d, s"<dark_gray>%var(w) (INT %var(req))", s"%var(cls): %var(g)", "w_buy_%var(w)", 110);
+            }
+        }
+    }
+    if (line shown == 0) {
+        dialog.addBodyText(line d, s"<gold>You know every word we have.");
+    }
+    default.openDialog(line d);
+}
+
+function libraryBuy(uuid: str, w: str) {
+    line pr = wordPrice(w);
+    if (stat(uuid, "int") < line pr[2]) {
+        libraryPage("<red>You need more INT to grasp that word.");
+        return;
+    }
+    if ((pdGet(uuid, "gold") as num) < line pr[1]) {
+        libraryPage("<red>You can't afford that.");
+        return;
+    }
+    giveGold(uuid, 0 - line pr[1]);
+    learnWord(uuid, w);
+    line g = wordData(w)[2] as str;
+    libraryPage("<green>Learned <#E080FF>%var(w)</#E080FF> (%var(g)).");
+}
+
+// ---------------------------------------------------------------- trainer
+
+function trainerPage(msg: str) {
+    line uuid = default.uuid;
+    line known = pdArts(uuid);
+    line gold = pdGet(uuid, "gold");
+    line d = dialog.create("trainer", s"<#FFC83C><b>Weapon Arts", type="Multi Action with Exit Button");
+    dialog.addBodyText(line d, s"<gray>Gold: <gold>%var(gold)</gold>. Arts go into ability slots (Journal > Weapon Arts).");
+    if (msg != "") {
+        dialog.addBodyText(line d, s"%var(msg)");
+    }
+    dialog.setColumnCount(line d, 2);
+    for (line a of allArts()) {
+        line ad = artData(line a);
+        line n = line ad[1] as str;
+        line ds = line ad[5] as str;
+        line price = line ad[4];
+        if (line known.find(line a) == 0) {
+            dialog.addButton(line d, s"<#FFC83C>%var(n) <gray>%var(price)g", s"%var(ds)", "ar_buy_%var(a)", 150);
+        } else {
+            dialog.addButton(line d, s"<dark_gray>%var(n) (known)", s"%var(ds)", "ar_buy_%var(a)", 150);
+        }
+    }
+    default.openDialog(line d);
+}
+
+function trainerBuy(uuid: str, a: str) {
+    line known = pdArts(uuid);
+    if (line known.find(a) != 0) {
+        trainerPage("<gray>You know that one.");
+        return;
+    }
+    line price = artData(a)[4] as num;
+    if ((pdGet(uuid, "gold") as num) < line price) {
+        trainerPage("<red>Come back with more gold.");
+        return;
+    }
+    giveGold(uuid, 0 - line price);
+    line known.append(a);
+    pdSet(uuid, "arts", line known);
+    artSet(uuid, a);
+    line n = artData(a)[1] as str;
+    trainerPage("<green>You learned <#FFC83C>%var(n)</#FFC83C>.");
+}

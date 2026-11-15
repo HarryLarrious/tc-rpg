@@ -1,0 +1,192 @@
+// Points of interest outside the town: the bandit camp, the ruins over a
+// crypt, the cave, the grove shrine and the lake dock. Monster spawns are
+// placed by monsters.tc from wPois.
+
+/** Builds point of interest `name`. */
+function buildPoi(name: str) {
+    if (!global wPois.hasKeys(name)) {
+        return;
+    }
+    line p = global wPois[name];
+    line x = num.round(line p[1] as num);
+    line z = num.round(line p[2] as num);
+    line y = groundY(line x, line z);
+    if (name == "camp") {
+        buildCamp(line x, line y, line z);
+    } else if (name == "ruins") {
+        buildRuins(line x, line y, line z);
+    } else if (name == "cave") {
+        buildCave(line x, line y, line z);
+    } else if (name == "grove") {
+        buildShrine(line x, line y, line z);
+    } else if (name == "lake") {
+        buildDock(line x, line z, line p[3] as num);
+    }
+}
+
+/** Levels a disc of radius r at height y (top block grass). */
+function flatten(x: num, y: num, z: num, r: num, top: str) {
+    line dz = 0 - r;
+    while (line dz <= r) {
+        line half = num.floor(num.root(num.max(0, r * r - line dz * line dz)));
+        fill("dirt", x - line half, y - 3, z + line dz, x + line half, y - 1, z + line dz);
+        fill(top, x - line half, y, z + line dz, x + line half, y, z + line dz);
+        fill("air", x - line half, y + 1, z + line dz, x + line half, y + 12, z + line dz);
+        line dz += 1;
+        wBreathe(20);
+    }
+}
+
+/** A tent of wool over a 4 x 5 frame. */
+function tent(x: num, y: num, z: num, wool: str) {
+    fill(wool, x - 2, y + 1, z - 2, x - 2, y + 1, z + 2);
+    fill(wool, x + 2, y + 1, z - 2, x + 2, y + 1, z + 2);
+    fill(wool, x - 1, y + 2, z - 2, x - 1, y + 2, z + 2);
+    fill(wool, x + 1, y + 2, z - 2, x + 1, y + 2, z + 2);
+    fill(wool, x, y + 3, z - 2, x, y + 3, z + 2);
+    putD("red_bed", x, y + 1, z, "facing=north,part=foot");
+}
+
+/** The bandit camp: a palisade ring, tents, a fire and loot. */
+function buildCamp(x: num, y: num, z: num) {
+    flatten(x, y, z, 17, "coarse_dirt");
+    repeat (line i to 72) {
+        line a = (line i - 1) * 5;
+        if (line i % 18 > 2) {
+            line px = num.round(x + num.cos(line a) * 16);
+            line pz = num.round(z + num.sin(line a) * 16);
+            fill("spruce_log", line px, y + 1, line pz, line px, y + 3 + wHash(line px, line pz, 1) % 2, line pz);
+        }
+    }
+    tent(x - 8, y, z - 4, "brown_wool");
+    tent(x + 8, y, z - 4, "gray_wool");
+    tent(x, y, z + 9, "brown_wool");
+    putD("campfire", x, y + 1, z, "lit=true");
+    put("chest", x + 3, y + 1, z + 3);
+    put("barrel", x - 3, y + 1, z + 3);
+    fill("spruce_fence", x + 10, y + 1, z + 6, x + 12, y + 1, z + 6);
+    put("target", x - 11, y + 1, z + 5);
+}
+
+/** Ruins: broken walls and a stair down into the crypt below. */
+function buildRuins(x: num, y: num, z: num) {
+    flatten(x, y, z, 14, "grass_block");
+    for (line s of [vec(-9, 0, -9), vec(9, 0, -9), vec(-9, 0, 9), vec(9, 0, 9)]) {
+        line h = 2 + wHash(x + line s.x, z + line s.z, 2) % 5;
+        fill("mossy_stone_bricks", x + line s.x - 1, y + 1, z + line s.z - 1, x + line s.x + 1, y + line h, z + line s.z + 1);
+    }
+    fill("cracked_stone_bricks", x - 9, y + 1, z - 9, x + 1, y + 2, z - 9);
+    fill("mossy_cobblestone", x + 9, y + 1, z - 6, x + 9, y + 3, z + 4);
+    fill("stone_bricks", x - 3, y, z - 3, x + 3, y, z + 3);
+    // Crypt: a vaulted hall 17 x 21 under the ruins, 6 high.
+    line cy = y - 12;
+    fill("deepslate_bricks", x - 10, line cy - 1, z - 12, x + 10, line cy + 7, z + 12);
+    fill("air", x - 9, line cy, z - 11, x + 9, line cy + 5, z + 11);
+    fill("polished_deepslate", x - 9, line cy - 1, z - 11, x + 9, line cy - 1, z + 11);
+    // Pillars and wall torches.
+    line pz = z - 8;
+    while (line pz <= z + 8) {
+        fill("deepslate_tiles", x - 5, line cy, line pz, x - 5, line cy + 5, line pz);
+        fill("deepslate_tiles", x + 5, line cy, line pz, x + 5, line cy + 5, line pz);
+        putD("soul_lantern", x - 5, line cy + 4, line pz + 1, "hanging=false");
+        line pz += 4;
+    }
+    // Stairs down from the ruins.
+    repeat (line i to 12) {
+        line sy = y - line i + 1;
+        fill("air", x - 1, line sy, z + line i - 1, x + 1, line sy + 3, z + line i - 1);
+        fillD("stone_brick_stairs", x - 1, line sy - 1, z + line i - 1, x + 1, line sy - 1, z + line i - 1, "facing=north");
+    }
+    // The boss's dais and the reward chest.
+    fill("chiseled_deepslate", x - 3, line cy, z - 11, x + 3, line cy, z - 8);
+    put("chest", x, line cy + 1, z - 10);
+    putD("skeleton_skull", x - 2, line cy + 1, z - 10, "rotation=0");
+    putD("skeleton_skull", x + 2, line cy + 1, z - 10, "rotation=0");
+    global wPois["crypt"] = [x, z - 4, 9, line cy];
+}
+
+/** The cave: a tunnel into a stony hill and a chamber. */
+function buildCave(x: num, y: num, z: num) {
+    // A rocky mound with a hollow inside.
+    line r = 13;
+    line dz = 0 - r;
+    while (line dz <= r) {
+        line dx = 0 - r;
+        while (line dx <= r) {
+            line d = num.root(line dx * line dx + line dz * line dz);
+            if (line d <= r) {
+                line top = y + num.round((r - line d) * 0.9) + wHash(x + line dx, z + line dz, 6) % 2;
+                fill("stone", x + line dx, y, z + line dz, x + line dx, line top, z + line dz);
+                if (line d < 8) {
+                    fill("air", x + line dx, y + 1, z + line dz, x + line dx, y + num.round(6 - line d * 0.4), z + line dz);
+                }
+            }
+            line dx += 1;
+        }
+        line dz += 1;
+        wBreathe(4);
+    }
+    fill("air", x - 1, y + 1, z + 7, x + 1, y + 3, z + r + 1);
+    fill("gravel", x - 6, y, z - 6, x + 6, y, z + 6);
+    put("cobweb", x - 5, y + 3, z - 4);
+    put("cobweb", x + 4, y + 2, z - 5);
+    put("chest", x, y + 1, z - 6);
+    putD("lantern", x, y + 1, z + 4, "hanging=false");
+}
+
+/** The grove shrine: a ring of mossy stones around a glowing tree. */
+function buildShrine(x: num, y: num, z: num) {
+    flatten(x, y, z, 8, "moss_block");
+    repeat (line i to 8) {
+        line a = (line i - 1) * 45;
+        line px = num.round(x + num.cos(line a) * 6);
+        line pz = num.round(z + num.sin(line a) * 6);
+        fill("mossy_stone_bricks", line px, y + 1, line pz, line px, y + 2 + line i % 2, line pz);
+    }
+    put("glowstone", x, y, z);
+    game.generateTree(loc(x, y + 1, z), type="Azalea Tree");
+    putD("lantern", x + 2, y + 1, z + 2, "hanging=false");
+}
+
+/** A wooden dock reaching into the lake. */
+function buildDock(x: num, z: num, r: num) {
+    line sx = num.round(x - r * 0.9);
+    line by = waterY() + 1;
+    fill("spruce_planks", line sx, line by, z - 1, line sx + 10, line by, z + 1);
+    line k = 0;
+    while (line k <= 10) {
+        fill("spruce_log", line sx + line k, waterY() - 3, z - 1, line sx + line k, line by - 1, z - 1);
+        fill("spruce_log", line sx + line k, waterY() - 3, z + 1, line sx + line k, line by - 1, z + 1);
+        line k += 5;
+    }
+    put("barrel", line sx + 9, line by + 1, z);
+    lampPost(line sx + 10, line by + 1, z + 1);
+}
+
+/** After the world is built: labels on special buildings, NPCs and
+ * monster spawners come to life. */
+function worldAfterBuild {
+    placeLabels();
+    worldPopulate();
+}
+
+/** Floating name labels over the doors of special buildings. */
+function placeLabels {
+    select entitiesByName(saved wLabels);
+    selectedEntity.remove();
+    select reset;
+    saved wLabels = [];
+    repeat (line i to global wBlds.len()) {
+        line b = global wBlds[line i];
+        line t = b["type"] as str;
+        if (line t != "house" && line t != "farm" && line t != "none") {
+            line dr = bldDoor(line b);
+            line st = facingStep(b["facing"] as str);
+            line name = bldName(line t);
+            game.spawnTextDisplay(loc((line dr[1] as num) + 0.5 + (line st[1] as num) * 0.6, townY() + 4.2, (line dr[2] as num) + 0.5 + (line st[2] as num) * 0.6), s"<gold><b>%var(name)");
+            lastEntity.setDisplayBillboard(type="Vertical");
+            lastEntity.setTextDisplayBackground("#000000", 35);
+            saved wLabels.append(lastEntity.uuid);
+        }
+    }
+}

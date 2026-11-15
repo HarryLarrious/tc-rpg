@@ -1,0 +1,189 @@
+// The character designer: a dialog of choices previewed live on the
+// character, who turns to face the camera while it is open.
+
+/** Per player: 1 while designing. */
+declare global pDesign: dict[num];
+
+/** Hex text of color c ("#RRGGBB"). */
+function hexOf(c: num): str {
+    line digits = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "A", "B", "C", "D", "E", "F"];
+    line s = "";
+    line v = c;
+    repeat (6) {
+        line dd = line digits[1 + line v % 16];
+        line s = "%var(dd)%var(s)";
+        line v = num.floor(line v / 16);
+    }
+    return "#%var(s)";
+}
+
+/** Opens the designer (first join, or from the Journal for 50 gold). */
+function designerOpen {
+    line uuid = default.uuid;
+    if ((pdGet(uuid, "made") as num) == 1 && global pDesign[uuid] != 1) {
+        if ((pdGet(uuid, "gold") as num) < 50) {
+            sendBar(uuid, "<red>The mirror costs 50 gold.");
+            return;
+        }
+    }
+    if (hasBody(uuid) == 0) {
+        enterWorld();
+    }
+    global pDesign[uuid] = 1;
+    designerDialog("");
+}
+
+/** Option lists: ids and labels for the color pickers. */
+function colorOptions(cols: list[num]): list {
+    line ids: list[str] = [];
+    line labels: list[txt] = [];
+    repeat (line i to cols.len()) {
+        line c = cols[line i];
+        line h = hexOf(line c);
+        line ids.append("%var(c)");
+        line labels.append(s"<%var(h)>■■■ <white>%var(i)");
+    }
+    return [line ids, line labels];
+}
+
+function designerDialog(msg: str) {
+    line uuid = default.uuid;
+    line app = pdGet(uuid, "app") as dict;
+    line race = app["race"] as str;
+    line sex = "m";
+    if ((app["build"] as str).endsWith("f")) {
+        line sex = "f";
+    }
+    line d = dialog.create("designer", s"<gold><b>Create your character", canClose="False", type="Multi Action");
+    line blurb = raceBlurb(race);
+    dialog.addBodyText(line d, s"<white>%var(blurb)");
+    if (msg != "") {
+        dialog.addBodyText(line d, s"%var(msg)");
+    }
+    line rl: list[txt] = [];
+    for (line r of raceIds()) {
+        line n = raceName(line r);
+        line rl.append(s"%var(n)");
+    }
+    dialog.addOptionInput(line d, "race", s"Race", 220, race, raceIds(), line rl);
+    dialog.addOptionInput(line d, "sex", s"Body", 220, line sex, ["m", "f"], [s"Masculine", s"Feminine"]);
+    line base = raceScale(race);
+    dialog.addNumberInput(line d, "height", s"Height", 0.9, 1.1, (app["scale"] as num) / line base, 0.01, 220);
+    line hs: list[str] = ["none"];
+    line hl: list[txt] = [s"Bald"];
+    for (line h of rigOptions("hair")) {
+        line hs.append(line h);
+        line hl.append(s"%var(h)");
+    }
+    line cur = app["hairStyle"] as str;
+    if (line cur == "") {
+        line cur = "none";
+    }
+    dialog.addOptionInput(line d, "hair", s"Hair", 220, line cur, line hs, line hl);
+    line bs: list[str] = ["none"];
+    line bl: list[txt] = [s"Clean-shaven"];
+    for (line b of rigOptions("beard")) {
+        line bs.append(line b);
+        line bl.append(s"%var(b)");
+    }
+    line cb = app["beard"] as str;
+    if (line cb == "") {
+        line cb = "none";
+    }
+    dialog.addOptionInput(line d, "beard", s"Beard", 220, line cb, line bs, line bl);
+    for (line pick of [["skin", "Skin / fur", raceSkins(race)], ["hair", "Hair color", hairColors()], ["eye", "Eyes", eyeColors()], ["cloth", "Tunic", clothColors()], ["pants", "Trousers", clothColors()]]) {
+        line key = pick[1] as str;
+        line label = pick[2] as str;
+        line opts = colorOptions(pick[3] as list[num]);
+        line curc = app[line key] as num;
+        line ids = opts[1] as list[str];
+        if (ids.find("%var(curc)") == 0) {
+            line curc = num.parse(ids[1]);
+        }
+        dialog.addOptionInput(line d, "c_%var(key)", s"%var(label)", 220, "%var(curc)", ids, opts[2] as list[txt]);
+    }
+    dialog.setColumnCount(line d, 2);
+    dialog.addButton(line d, s"<yellow>Preview", s"Show the changes", "d_prev", 110);
+    dialog.addButton(line d, s"<green><b>Done", s"Begin your adventure", "d_done", 110);
+    default.openDialog(line d);
+}
+
+/** Reads the designer dialog into the player's appearance. */
+function designerApply {
+    line uuid = default.uuid;
+    line app = pdGet(uuid, "app") as dict;
+    line race = game.getDialogText("race");
+    line sex = game.getDialogText("sex");
+    line oldRace = app["race"] as str;
+    line app["race"] = race;
+    line app["build"] = raceBuild(race, sex);
+    line app["scale"] = raceScale(race) * game.getDialogNumber("height");
+    line h = game.getDialogText("hair");
+    if (h == "none") {
+        line h = "";
+    }
+    line app["hairStyle"] = h;
+    line b = game.getDialogText("beard");
+    if (b == "none") {
+        line b = "";
+    }
+    line app["beard"] = b;
+    line app["ears"] = raceEars(race);
+    line app["tail"] = raceTail(race);
+    for (line k of ["skin", "hair", "eye", "cloth", "pants"]) {
+        line app[line k as str] = num.parse(game.getDialogText("c_%var(k)"));
+    }
+    if (race != line oldRace) {
+        // A new race starts from that race's first skin tone.
+        line app["skin"] = raceSkins(race)[1];
+    }
+    pdSet(uuid, "app", line app);
+    statsRecalc(uuid);
+    rigRemove(uuid);
+    rigSpawn(uuid, global pBody[uuid], loc(0, 0, 0), playerApp(uuid));
+}
+
+/** Designer buttons. */
+function designerButton(id: str) {
+    if (id == "d_prev") {
+        designerApply();
+        designerDialog("<gray>Previewing. Change anything, then press Done.");
+    }
+}
+
+function designerFinish {
+    line uuid = default.uuid;
+    designerApply();
+    line first = (pdGet(uuid, "made") as num) == 0;
+    if (!line first) {
+        giveGold(uuid, -50);
+    }
+    pdSet(uuid, "made", 1);
+    global pDesign[uuid] = 0;
+    global pHp[uuid] = stat(uuid, "maxHp");
+    hotbarRefresh(uuid);
+    if (line first) {
+        // Starting kit: a sword, a wand with one slot, leather armor.
+        equipSet(uuid, "main", makeWeapon("sword", 1, 1, 11));
+        equipSet(uuid, "off", makeWeapon("wand", 1, 1, 12));
+        equipSet(uuid, "torso", makeArmor("torso", "leather", 1, 1, 13));
+        line eq = pdGet(uuid, "equip") as dict;
+        line eq["off"] = (line eq["off"] as item).setTag("sp1", "ignis sagitta");
+        pdSet(uuid, "equip", line eq);
+        hotbarRefresh(uuid);
+        default.giveItems(makePotion("hp", 1).setStackSize(3));
+        default.sendTitle(s"<gold><b>Valenmoor", s"<gray>Your story begins", 10, 60, 20);
+        default.sendMessage(s"<gold>Welcome to Valenmoor!</gold> <gray>WASD move, <yellow>Space</yellow> jump, <yellow>Ctrl</yellow> sprint, <yellow>Shift</yellow> dodge, <yellow>left click</yellow> attack, <yellow>right click</yellow> heavy attack, <yellow>2-8</yellow> spells and arts, <yellow>F</yellow> talk, <yellow>Q</yellow> lock on, <yellow>9</yellow> Journal.");
+        default.sendMessage(s"<gray>Speak to <gold>Lord Aldric Valen</gold> in the keep, find the <aqua>Adventurers' Guild</aqua> for contracts, and the <#E080FF>Arcane Library</#E080FF> to learn words of power. Try typing <#E080FF>ignis sagitta</#E080FF> in chat!");
+    }
+}
+
+/** Keeps a designing player's character facing the camera. */
+function designerFace(uuid: str, camYaw: num) {
+    global pYaw[uuid] = wrapDeg(camYaw + 180);
+}
+
+/** Forgets a player's designer state. */
+function designerCleanup(uuid: str) {
+    global pDesign[uuid] = 0;
+}

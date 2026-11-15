@@ -1,0 +1,555 @@
+// World builder: runs the plan's phases a little at a time, resumable, and
+// slows down while the plot is busy.
+//
+//   @world build      start or resume the build
+//   @world stop       pause it
+//   @world status     show the phase and progress
+//   @world reset      forget progress (the next build starts over)
+//   @world phase NAME rebuild one phase (terrain, roads, plaza, wall,
+//                     buildings, lamps, trees, pois)
+
+/** Build phases in order. */
+function worldPhases(): list[str] {
+    return ["terrain", "roads", "plaza", "wall", "buildings", "lamps", "trees", "pois", "done"];
+}
+
+/** Saved build progress: phase index (1-based) and step within it. */
+declare saved wPhase: num;
+declare saved wStep: num;
+/** Running builder id (0 = stopped). */
+declare global wRun: num;
+/** 1 while a build should run (it resumes after a restart). */
+declare saved wAuto: num;
+/** Saved copy of the plan, so a restart does not need to plan again. */
+declare saved wSaved: dict;
+/** UUIDs of label text displays the builder placed. */
+declare saved wLabels: list[str];
+
+/** Saves the plan. */
+function planSave {
+    saved wSaved = {v: 3, S: global wS, cx: global wCx, cz: global wCz, R: global wR, rot: global wRot,
+        roads: global wRoads, wall: global wWall, gates: global wGates, blds: global wBlds, pois: global wPois};
+}
+
+/** Loads the plan from the saved copy (planning again if it is missing
+ * or from another plot size). Rebuilds the grids. */
+function planLoad {
+    if (global wPlanned == 1) {
+        return;
+    }
+    line sv = saved wSaved;
+    if (line sv.hasKeys("v") && line sv["v"] == 3 && line sv["S"] == game.plotSize) {
+        global wS = line sv["S"] as num;
+        global wCx = line sv["cx"] as num;
+        global wCz = line sv["cz"] as num;
+        global wR = line sv["R"] as num;
+        global wRot = line sv["rot"] as num;
+        global wWall = line sv["wall"] as list[vec];
+        global wGates = line sv["gates"] as list[list];
+        global wPois = line sv["pois"] as dict[list];
+        global wRoads = [];
+        global wGrid = {};
+        for (line r of line sv["roads"] as list[list]) {
+            wAddRoad(line r[1] as num, line r[2] as num, line r[3] as num, line r[4] as num, line r[5] as num, line r[6] as str);
+        }
+        global wBlds = [];
+        global wBGrid = {};
+        for (line b of line sv["blds"] as list[dict]) {
+            wAddBld(line b);
+        }
+        global wPlanned = 1;
+        return;
+    }
+    worldPlan();
+    planSave();
+}
+
+/** Index of building type t in the plan (first), or 0. */
+function bldOfType(t: str): num {
+    repeat (line i to global wBlds.len()) {
+        if (global wBlds[line i]["type"] == t) {
+            return line i;
+        }
+    }
+    return 0;
+}
+
+function worldCommand(words: list) {
+    line sub = "status";
+    if (words.len() >= 2) {
+        line sub = words[2] as str;
+    }
+    if (line sub == "build") {
+        if (global wRun != 0) {
+            default.sendMessage(s"<gray>The builder is already running.");
+            return;
+        }
+        saved wAuto = 1;
+        start worldBuilder;
+    } else if (line sub == "stop") {
+        saved wAuto = 0;
+        global wRun = 0;
+        default.sendMessage(s"<gray>Builder stopped.");
+    } else if (line sub == "reset") {
+        saved wPhase = 1;
+        saved wStep = 0;
+        default.sendMessage(s"<gray>Build progress reset.");
+    } else if (line sub == "replan") {
+        saved wSaved = {};
+        global wPlanned = 0;
+        default.sendMessage(s"<gray>The plan will be worked out again.");
+    } else if (line sub == "phase") {
+        line ph = worldPhases().find(words[3] as str);
+        if (line ph == 0) {
+            default.sendMessage(s"<gray>Phases: terrain roads plaza wall buildings lamps trees pois");
+            return;
+        }
+        saved wPhase = line ph;
+        saved wStep = 0;
+        default.sendMessage(s"<gray>Next build starts at that phase.");
+    } else {
+        line ph = saved wPhase;
+        line name = "terrain";
+        if (line ph >= 1 && line ph <= worldPhases().len()) {
+            line name = worldPhases()[line ph] as str;
+        }
+        line st = saved wStep;
+        line run = global wRun;
+        line nb = global wBlds.len();
+        default.sendMessage(s"<gray>World: phase <yellow>%var(name)</yellow> step %var(st), running %var(run), %var(nb) buildings planned.");
+    }
+}
+
+/** The builder: plans (or loads the plan), then works through the phases. */
+process worldBuilder {
+    global wRun = game.ticksSinceStartup;
+    line me = global wRun;
+    allPlayers.sendMessage(s"<gold>World builder started.</gold> <gray>Planning Valenmoor...");
+    planLoad();
+    if (saved wPhase < 1) {
+        saved wPhase = 1;
+    }
+    while (global wRun == line me && saved wPhase < worldPhases().len()) {
+        line name = worldPhases()[saved wPhase] as str;
+        line more = buildStep(line name, saved wStep);
+        if (line more == 0) {
+            allPlayers.sendMessage(s"<gray>World: <yellow>%var(name)</yellow> done.");
+            saved wPhase += 1;
+            saved wStep = 0;
+        } else {
+            saved wStep += 1;
+        }
+        if (saved wStep % 20 == 0) {
+            line p = saved wStep;
+            allPlayers.sendActionBar(s"<gray>Building the world: <yellow>%var(name)</yellow> %var(p)");
+        }
+        wait;
+        while (game.cpuUsage > 75) {
+            wait(5);
+        }
+    }
+    if (global wRun == line me) {
+        global wRun = 0;
+        if (saved wPhase >= worldPhases().len()) {
+            saved wAuto = 0;
+            saved spawnPoint = vec(global wCx + 0.5, townY() + 1, global wCz + 12.5);
+            allPlayers.sendMessage(s"<gold>The world is built.</gold>");
+            worldAfterBuild();
+        }
+    }
+}
+
+/** Does step `step` of phase `name`; returns 1 while the phase has more. */
+function buildStep(name: str, step: num): num {
+    if (name == "terrain") {
+        if (step >= global wS) {
+            return 0;
+        }
+        terrainRow(step);
+        return 1;
+    }
+    if (name == "roads") {
+        if (step >= global wRoads.len()) {
+            return 0;
+        }
+        buildRoad(step + 1);
+        return 1;
+    }
+    if (name == "plaza") {
+        buildPlaza();
+        return 0;
+    }
+    if (name == "wall") {
+        if (step >= global wWall.len() + global wGates.len()) {
+            return 0;
+        }
+        if (step < global wWall.len()) {
+            buildWallEdge(step + 1);
+        } else {
+            buildGate(step - global wWall.len() + 1);
+        }
+        return 1;
+    }
+    if (name == "buildings") {
+        if (step >= global wBlds.len()) {
+            return 0;
+        }
+        buildBuilding(step + 1);
+        return 1;
+    }
+    if (name == "lamps") {
+        if (step >= global wRoads.len()) {
+            return 0;
+        }
+        buildLamps(step + 1);
+        return 1;
+    }
+    if (name == "trees") {
+        if (step * 6 >= global wS) {
+            return 0;
+        }
+        treeRow(step * 6);
+        return 1;
+    }
+    if (name == "pois") {
+        line names = ["camp", "ruins", "cave", "grove", "lake"];
+        if (step >= line names.len()) {
+            return 0;
+        }
+        buildPoi(line names[step + 1] as str);
+        return 1;
+    }
+    return 0;
+}
+
+/** Road surface block for street kind `kind` at hash h. */
+function roadBlock(kind: str, h: num): str {
+    if (kind == "country") {
+        line c = ["dirt_path", "dirt_path", "dirt_path", "coarse_dirt", "gravel"];
+        return line c[1 + h % 5] as str;
+    }
+    if (kind == "main" || kind == "plaza") {
+        line c = ["stone_bricks", "stone_bricks", "cobblestone", "andesite", "cracked_stone_bricks"];
+        return line c[1 + h % 5] as str;
+    }
+    line c = ["cobblestone", "gravel", "andesite", "cobblestone", "mossy_cobblestone"];
+    return line c[1 + h % 5] as str;
+}
+
+/** Paves street i: squares of its width every block along it, with a
+ * plank bridge where it crosses water. */
+function buildRoad(i: num) {
+    line r = global wRoads[i];
+    line x1 = line r[1] as num;
+    line z1 = line r[2] as num;
+    line x2 = line r[3] as num;
+    line z2 = line r[4] as num;
+    line w = line r[5] as num;
+    line kind = line r[6] as str;
+    line L = num.root((x2 - line x1) ** 2 + (z2 - line z1) ** 2);
+    line n = num.ceil(line L);
+    line hw = num.floor(line w / 2);
+    repeat (line k to line n + 1) {
+        line t = (line k - 1) / num.max(1, line n);
+        line x = num.round(line x1 + (line x2 - line x1) * line t);
+        line z = num.round(line z1 + (line z2 - line z1) * line t);
+        line y = townY();
+        if (line kind == "country") {
+            line y = groundY(line x, line z);
+        }
+        if (line y < waterY() + 1 && line kind == "country") {
+            // Bridge deck over the water, with rails.
+            line by = waterY() + 2;
+            fill("spruce_planks", line x - line hw, line by, line z - line hw, line x + line hw, line by, line z + line hw);
+            fill("air", line x - line hw, line by + 1, line z - line hw, line x + line hw, line by + 3, line z + line hw);
+            fill("spruce_log", line x, line y, line z, line x, line by - 1, line z);
+            if (num.abs(line x2 - line x1) >= num.abs(line z2 - line z1)) {
+                fill("spruce_fence", line x - line hw, line by + 1, line z - line hw - 1, line x + line hw, line by + 1, line z - line hw - 1);
+                fill("spruce_fence", line x - line hw, line by + 1, line z + line hw + 1, line x + line hw, line by + 1, line z + line hw + 1);
+            } else {
+                fill("spruce_fence", line x - line hw - 1, line by + 1, line z - line hw, line x - line hw - 1, line by + 1, line z + line hw);
+                fill("spruce_fence", line x + line hw + 1, line by + 1, line z - line hw, line x + line hw + 1, line by + 1, line z + line hw);
+            }
+        } else {
+            line b = roadBlock(line kind, wHash(line x, line z, 17));
+            fill(line b, line x - line hw, line y, line z - line hw, line x + line hw, line y, line z + line hw);
+            fill("air", line x - line hw, line y + 1, line z - line hw, line x + line hw, line y + 3, line z + line hw);
+            if (line kind == "country") {
+                fill("dirt", line x - line hw, line y - 2, line z - line hw, line x + line hw, line y - 1, line z + line hw);
+            }
+        }
+        wBreathe(25);
+    }
+}
+
+/** The market square: paving, a fountain, market stalls and benches. */
+function buildPlaza {
+    line cx = global wCx;
+    line cz = global wCz;
+    line G = townY();
+    fill("stone_bricks", cx - 14, G, cz - 14, cx + 14, G, cz + 14);
+    fill("air", cx - 14, G + 1, cz - 14, cx + 14, G + 6, cz + 14);
+    fill("polished_andesite", cx - 10, G, cz - 10, cx + 10, G, cz + 10);
+    fill("chiseled_stone_bricks", cx - 6, G, cz - 6, cx + 6, G, cz + 6);
+    fill("polished_andesite", cx - 5, G, cz - 5, cx + 5, G, cz + 5);
+    // Fountain.
+    fill("stone_bricks", cx - 3, G, cz - 3, cx + 3, G + 1, cz + 3);
+    fill("water_bucket", cx - 2, G + 1, cz - 2, cx + 2, G + 1, cz + 2);
+    fill("chiseled_stone_bricks", cx, G + 1, cz, cx, G + 3, cz);
+    putD("lantern", cx, G + 4, cz, "hanging=false");
+    // Market stalls with colored awnings.
+    line wools = ["red_wool", "yellow_wool", "blue_wool", "green_wool"];
+    line spots: list[vec] = [vec(cx - 10, 0, cz - 10), vec(cx + 8, 0, cz - 10), vec(cx - 10, 0, cz + 9), vec(cx + 8, 0, cz + 9)];
+    repeat (line i to 4) {
+        line s = line spots[line i];
+        line x = line s.x;
+        line z = line s.z;
+        for (line c of [vec(x, 0, z), vec(x + 2, 0, z), vec(x, 0, z + 1), vec(x + 2, 0, z + 1)]) {
+            fill("spruce_fence", line c.x, G + 1, line c.z, line c.x, G + 2, line c.z);
+        }
+        fill(line wools[line i] as str, x - 1, G + 3, z - 1, x + 3, G + 3, z + 2);
+        fill("barrel", x + 1, G + 1, z, x + 1, G + 1, z);
+        put("composter", x + 1, G + 1, z + 1);
+    }
+    // Lamp posts at the corners.
+    for (line c of [vec(cx - 13, 0, cz - 13), vec(cx + 13, 0, cz - 13), vec(cx - 13, 0, cz + 13), vec(cx + 13, 0, cz + 13)]) {
+        lampPost(line c.x, G + 1, line c.z);
+    }
+}
+
+/** A lamp post standing on y. */
+function lampPost(x: num, y: num, z: num) {
+    fill("dark_oak_fence", x, y, z, x, y + 2, z);
+    putD("lantern", x, y + 3, z, "hanging=false");
+}
+
+/** 1 when (x, z) lies inside a planned building's lot (with margin m). */
+function inBuilding(x: num, z: num, m: num): num {
+    line key = "%math(floor(%var(x)/16)),%math(floor(%var(z)/16))";
+    line gx = num.floor(x / 16);
+    line gz = num.floor(z / 16);
+    line key = "%var(gx),%var(gz)";
+    if (global wBGrid.hasKeys(line key)) {
+        for (line bi of global wBGrid[line key] as list[num]) {
+            line o = global wBlds[line bi];
+            if (x >= (line o["x0"] as num) - m && x <= (line o["x1"] as num) + m && z >= (line o["z0"] as num) - m && z <= (line o["z1"] as num) + m) {
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+/** 1 when (x, z) is on or right beside a street (margin m). */
+function onRoad(x: num, z: num, m: num): num {
+    line gx = num.floor(x / 16);
+    line gz = num.floor(z / 16);
+    line key = "%var(gx),%var(gz)";
+    if (global wGrid.hasKeys(line key)) {
+        for (line ri of global wGrid[line key] as list[num]) {
+            line r = global wRoads[line ri];
+            if (segDist(x, z, line r[1] as num, line r[2] as num, line r[3] as num, line r[4] as num) < (line r[5] as num) / 2 + m) {
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+/** Lamp posts along street i, every 14 blocks on alternating sides. */
+function buildLamps(i: num) {
+    line r = global wRoads[i];
+    line kind = line r[6] as str;
+    if (line kind == "plaza") {
+        return;
+    }
+    line x1 = line r[1] as num;
+    line z1 = line r[2] as num;
+    line x2 = line r[3] as num;
+    line z2 = line r[4] as num;
+    line L = num.root((x2 - line x1) ** 2 + (z2 - line z1) ** 2);
+    if (line L < 4) {
+        return;
+    }
+    line nx = 0 - (z2 - line z1) / line L;
+    line nz = (x2 - line x1) / line L;
+    line off = (line r[5] as num) / 2 + 0.8;
+    line step = 14;
+    if (line kind == "country") {
+        line step = 28;
+    }
+    line d = 3;
+    line side = 1;
+    while (line d < line L) {
+        line t = line d / line L;
+        line x = num.round(line x1 + (x2 - line x1) * line t + line nx * line off * line side);
+        line z = num.round(line z1 + (z2 - line z1) * line t + line nz * line off * line side);
+        if (inBuilding(line x, line z, 0) == 0 && onRoad(line x, line z, 0.3) == 0) {
+            line y = townY();
+            if (line kind == "country") {
+                line y = groundY(line x, line z);
+            }
+            if (line y >= waterY()) {
+                lampPost(line x, line y + 1, line z);
+            }
+        }
+        line d += line step;
+        line side = 0 - line side;
+    }
+}
+
+/** One edge of the town wall, from corner i to the next. */
+function buildWallEdge(i: num) {
+    line n = global wWall.len();
+    line a = global wWall[i];
+    line b = global wWall[i % n + 1];
+    line G = townY();
+    line L = (line b - line a).len();
+    line steps = num.ceil(line L * 2);
+    line cx = global wCx;
+    line cz = global wCz;
+    repeat (line k to line steps + 1) {
+        line t = (line k - 1) / line steps;
+        line p = line a + (line b - line a) * line t;
+        line nearGate = 0;
+        for (line g of global wGates) {
+            if (num.root(((g[1] as num) - line p.x) ** 2 + ((g[2] as num) - line p.z) ** 2) < 4) {
+                line nearGate = 1;
+            }
+        }
+        if (line nearGate == 0) {
+            line inward = vec(cx - line p.x, 0, cz - line p.z).setLength(1);
+            repeat (line j to 3) {
+                line q = line p + line inward * (line j - 1);
+                line x = num.round(line q.x);
+                line z = num.round(line q.z);
+                fill("stone_bricks", line x, G - 2, line z, line x, G + 6, line z);
+                if (line j == 1 && line k % 2 == 0) {
+                    put("stone_bricks", line x, G + 7, line z);
+                }
+            }
+            line x = num.round(line p.x);
+            line z = num.round(line p.z);
+            if (wHash(line x, line z, 3) % 5 == 0) {
+                put("mossy_stone_bricks", line x, G + 2 + wHash(line x, line z, 4) % 4, line z);
+            }
+        }
+        wBreathe(30);
+    }
+    // A tower at the corner.
+    line tx = num.round(line a.x);
+    line tz = num.round(line a.z);
+    line nearGate = 0;
+    for (line g of global wGates) {
+        if (num.root(((g[1] as num) - line a.x) ** 2 + ((g[2] as num) - line a.z) ** 2) < 7) {
+            line nearGate = 1;
+        }
+    }
+    if (line nearGate == 0) {
+        fill("stone_bricks", line tx - 2, G - 2, line tz - 2, line tx + 2, G + 10, line tz + 2);
+        fill("air", line tx - 1, G + 10, line tz - 1, line tx + 1, G + 10, line tz + 1);
+        for (line c of [vec(line tx - 2, 0, line tz - 2), vec(line tx + 2, 0, line tz - 2), vec(line tx - 2, 0, line tz + 2), vec(line tx + 2, 0, line tz + 2), vec(line tx, 0, line tz - 2), vec(line tx, 0, line tz + 2), vec(line tx - 2, 0, line tz), vec(line tx + 2, 0, line tz)]) {
+            put("stone_bricks", line c.x, G + 11, line c.z);
+        }
+        putD("lantern", line tx, G + 10, line tz, "hanging=false");
+    }
+}
+
+/** A gatehouse over gate i: two towers and an arch. */
+function buildGate(i: num) {
+    line g = global wGates[i];
+    line gx = g[1] as num;
+    line gz = g[2] as num;
+    line ang = g[3] as num;
+    line G = townY();
+    line tx = 0 - num.sin(line ang);
+    line tz = num.cos(line ang);
+    line ux = num.cos(line ang);
+    line uz = num.sin(line ang);
+    for (line s of [-1, 1]) {
+        line x = num.round(gx + line tx * 5 * line s);
+        line z = num.round(gz + line tz * 5 * line s);
+        fill("stone_bricks", line x - 2, G - 2, line z - 2, line x + 2, G + 11, line z + 2);
+        roofHip(line x - 2, line z - 2, line x + 2, line z + 2, G + 12, "deepslate_tile", "deepslate_tiles");
+        putD("lantern", num.round(line x + ux * 3), G + 4, num.round(line z + uz * 3), "hanging=false");
+    }
+    // The arch across the road.
+    repeat (line k to 9) {
+        line o = line k - 5;
+        repeat (line j to 3) {
+            line x = num.round(gx + line tx * line o + ux * (line j - 2));
+            line z = num.round(gz + line tz * line o + uz * (line j - 2));
+            fill("stone_bricks", line x, G + 6, line z, line x, G + 8, line z);
+            if (num.abs(line o) <= 2 && line j == 2) {
+                put("iron_bars", line x, G + 5, line z);
+            }
+        }
+    }
+    // Banners of the city on the arch.
+    putD("red_banner", num.round(gx + ux * 2), G + 5, num.round(gz + uz * 2), "rotation=0");
+}
+
+/** Trees and bushes on row z (and the next five), outside the town. */
+function treeRow(z: num) {
+    line x = 3;
+    while (line x < global wS - 3) {
+        line h = wHash(line x, z, 404);
+        line px = line x + line h % 5;
+        line pz = z + num.floor(line h / 5) % 5;
+        line dc = num.root((line px - global wCx) ** 2 + (line pz - global wCz) ** 2);
+        if (line dc > global wR + 22) {
+            line dens = wNoise(line px, line pz, 140, 91);
+            line grove = global wPois["grove"];
+            line dg = num.root((line px - (line grove[1] as num)) ** 2 + (line pz - (line grove[2] as num)) ** 2);
+            line chance = 0.04;
+            if (line dens > 0.55) {
+                line chance = 0.55;
+            } else if (line dens > 0.45) {
+                line chance = 0.2;
+            }
+            if (line dg < 70) {
+                line chance = 0.7;
+            }
+            if ((num.floor(line h / 25) % 1000) / 1000 < line chance) {
+                if (onRoad(line px, line pz, 2) == 0 && inBuilding(line px, line pz, 2) == 0) {
+                    line y = groundY(line px, line pz);
+                    if (line y > waterY() && line y < 84) {
+                        line kind = "Oak Tree";
+                        line r = num.floor(line h / 7) % 10;
+                        if (line dg < 70) {
+                            line kind = "Dark Oak Tree";
+                            if (line r < 3) { line kind = "Birch Tree"; }
+                        } else if (line y >= 66) {
+                            line kind = "Spruce Tree";
+                            if (line r < 3) { line kind = "Slightly Taller Spruce Tree"; }
+                        } else if (line r < 2) {
+                            line kind = "Birch Tree";
+                        } else if (line r < 3) {
+                            line kind = "Big Oak Tree";
+                        }
+                        treeAt(line px, line y + 1, line pz, line kind);
+                    }
+                }
+            }
+        }
+        line x += 6;
+        wBreathe(30);
+    }
+}
+
+/** Generates a tree of kind (Generate Tree names) at (x, y, z). */
+function treeAt(x: num, y: num, z: num, kind: str) {
+    if (kind == "Dark Oak Tree") {
+        game.generateTree(loc(x, y, z), type="Dark Oak Tree");
+    } else if (kind == "Birch Tree") {
+        game.generateTree(loc(x, y, z), type="Birch Tree");
+    } else if (kind == "Spruce Tree") {
+        game.generateTree(loc(x, y, z), type="Spruce Tree");
+    } else if (kind == "Slightly Taller Spruce Tree") {
+        game.generateTree(loc(x, y, z), type="Slightly Taller Spruce Tree");
+    } else if (kind == "Big Oak Tree") {
+        game.generateTree(loc(x, y, z), type="Big Oak Tree");
+    } else {
+        game.generateTree(loc(x, y, z), type="Oak Tree");
+    }
+}

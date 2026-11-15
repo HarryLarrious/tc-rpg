@@ -15,6 +15,7 @@ playerevent join {
         default.setToAdventureMode();
     default.clearInventory();
     packSend();
+    ensureGameLoop();
     bodyHideAllFrom();
     pdOf(line uuid);
     statsRecalc(line uuid);
@@ -46,7 +47,10 @@ playerevent respawn {
 function entryPoint(uuid: str): loc {
     line sp = saved spawnPoint;
     if (line sp.len() < 1) {
-        line sp = vec(500.5, 51, 500.5);
+        line sp = vec(num.floor(game.plotSize / 2) + 0.5, townY() + 2, num.floor(game.plotSize / 2) + 0.5);
+        if (global wPlanned == 1) {
+            line sp = vec(global wCx + 0.5, townY() + 1, global wCz + 12.5);
+        }
     }
     return loc(line sp.x, line sp.y, line sp.z);
 }
@@ -89,9 +93,6 @@ process playerLoop {
 /** One tick of the player (default): body, animation, combat, HUD. */
 function playerTick {
     line uuid = default.uuid;
-    if (global pLoopId[line uuid] == global loopSeq) {
-        global tick += 1;
-    }
     line speed = bodyTick();
     regenTick(line uuid);
     combatTick(line uuid);
@@ -102,6 +103,9 @@ function playerTick {
     line eye = default.eyeLocation;
     line camYaw = line eye.getCoordinate(coord="Yaw");
     line camPitch = line eye.getCoordinate(coord="Pitch");
+    if (global pDesign[line uuid] == 1) {
+        designerFace(line uuid, line camYaw);
+    }
     line yaw = global pYaw[line uuid];
     line pose = locoPose(line speed, global pGround[line uuid], line ph, global tick, wrapDeg(line camYaw - line yaw), 0 - line camPitch);
     line pose = actionPose(line uuid, line pose);
@@ -132,6 +136,19 @@ playerevent command {
             default.giveItems(makeArmor(line words[3] as str, line words[4] as str, argNum(line words, 5, 3), argNum(line words, 6, 3), game.ticksSinceStartup));
         } else {
             default.giveItems(makeWeapon(line words[2] as str, argNum(line words, 3, 3), argNum(line words, 4, 3), game.ticksSinceStartup));
+        }
+    } else if (line cmd == "eq") {
+        // @eq TYPE [TIER RARITY]: make and equip a weapon (testing).
+        line it = makeWeapon(line words[2] as str, argNum(line words, 3, 3), argNum(line words, 4, 3), game.ticksSinceStartup);
+        if (line words[2] == "shield" || line words[2] == "wand") {
+            equipSet(line uuid, "off", line it);
+        } else {
+            equipSet(line uuid, "main", line it);
+        }
+    } else if (line cmd == "eqa") {
+        // @eqa SET [TIER RARITY]: a full armor set (testing).
+        for (line sl of ["head", "torso", "arm", "leg"]) {
+            equipSet(line uuid, line sl as str, makeArmor(line sl as str, line words[2] as str, argNum(line words, 3, 3), argNum(line words, 4, 3), game.ticksSinceStartup));
         }
     } else if (line cmd == "loot") {
         repeat (8) {
